@@ -1,18 +1,20 @@
+import numpy as np
 import torch
+
 # torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+
 
 # from hash_encoding import HashEmbedder, SHEncoder
 
 # Misc
 img2mse = lambda x, y: torch.mean((x - y) ** 2)
-mse2psnr = lambda x: -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
+mse2psnr = lambda x: -10.0 * torch.log(x) / torch.log(torch.Tensor([10.0]))
 to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
 
-def batchify_query(inputs, query_function, batch_size=2 ** 22):
+def batchify_query(inputs, query_function, batch_size=2**22):
     """
     args:
         inputs: [..., input_dim]
@@ -25,7 +27,7 @@ def batchify_query(inputs, query_function, batch_size=2 ** 22):
     N = inputs.shape[0]
     outputs = []
     for i in range(0, N, batch_size):
-        output = query_function(inputs[i:i + batch_size])
+        output = query_function(inputs[i : i + batch_size])
         if isinstance(output, tuple):
             output = output[0]
         outputs.append(output)
@@ -43,8 +45,7 @@ class SineLayer(nn.Module):
     # If is_first=False, then the weights will be divided by omega_0 so as to keep the magnitude of
     # activations constant, but boost gradients to the weight matrix (see supplement Sec. 1.5)
 
-    def __init__(self, in_features, out_features, bias=True,
-                 is_first=False, omega_0=30):
+    def __init__(self, in_features, out_features, bias=True, is_first=False, omega_0=30):
         super().__init__()
         self.omega_0 = omega_0
         self.is_first = is_first
@@ -57,29 +58,29 @@ class SineLayer(nn.Module):
     def init_weights(self):
         with torch.no_grad():
             if self.is_first:
-                self.linear.weight.uniform_(-1 / self.in_features,
-                                            1 / self.in_features)
+                self.linear.weight.uniform_(-1 / self.in_features, 1 / self.in_features)
             else:
-                self.linear.weight.uniform_(-np.sqrt(6 / self.in_features) / self.omega_0,
-                                            np.sqrt(6 / self.in_features) / self.omega_0)
+                self.linear.weight.uniform_(
+                    -np.sqrt(6 / self.in_features) / self.omega_0, np.sqrt(6 / self.in_features) / self.omega_0
+                )
 
     def forward(self, input):
         return torch.sin(self.omega_0 * self.linear(input))
 
 
 class SirenNeRF(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, output_ch=4, skips=[4],
-                 first_omega_0=30, hidden_omega_0=1):
-        """
-        """
+    def __init__(self, D=8, W=256, input_ch=3, output_ch=4, skips=[4], first_omega_0=30, hidden_omega_0=1):
+        """ """
         super(SirenNeRF, self).__init__()
         self.D = D
         self.W = W
         self.input_ch = input_ch
         self.skips = skips
 
-        self.pts_linears = nn.ModuleList([SineLayer(input_ch, W, omega_0=first_omega_0, is_first=True)] \
-                                         + [SineLayer(W, W, omega_0=hidden_omega_0) for i in range(D - 1)])
+        self.pts_linears = nn.ModuleList(
+            [SineLayer(input_ch, W, omega_0=first_omega_0, is_first=True)]
+            + [SineLayer(W, W, omega_0=hidden_omega_0) for i in range(D - 1)]
+        )
 
         self.output_linear = nn.Linear(W, output_ch)
         # with torch.no_grad():
@@ -105,22 +106,22 @@ class Embedder:
 
     def create_embedding_fn(self):
         embed_fns = []
-        d = self.kwargs['input_dims']
+        d = self.kwargs["input_dims"]
         out_dim = 0
-        if self.kwargs['include_input']:
+        if self.kwargs["include_input"]:
             embed_fns.append(lambda x: x)
             out_dim += d
 
-        max_freq = self.kwargs['max_freq_log2']
-        N_freqs = self.kwargs['num_freqs']
+        max_freq = self.kwargs["max_freq_log2"]
+        N_freqs = self.kwargs["num_freqs"]
 
-        if self.kwargs['log_sampling']:
-            freq_bands = 2. ** torch.linspace(0., max_freq, steps=N_freqs)
+        if self.kwargs["log_sampling"]:
+            freq_bands = 2.0 ** torch.linspace(0.0, max_freq, steps=N_freqs)
         else:
-            freq_bands = torch.linspace(2. ** 0., 2. ** max_freq, steps=N_freqs)
+            freq_bands = torch.linspace(2.0**0.0, 2.0**max_freq, steps=N_freqs)
 
         for freq in freq_bands:
-            for p_fn in self.kwargs['periodic_fns']:
+            for p_fn in self.kwargs["periodic_fns"]:
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
                 out_dim += d
 
@@ -136,38 +137,39 @@ def get_embedder(multires, args, i=0):
         return nn.Identity(), 3
     elif i == 0:
         embed_kwargs = {
-            'include_input': True,
-            'input_dims': 3,
-            'max_freq_log2': multires - 1,
-            'num_freqs': multires,
-            'log_sampling': True,
-            'periodic_fns': [torch.sin, torch.cos],
+            "include_input": True,
+            "input_dims": 3,
+            "max_freq_log2": multires - 1,
+            "num_freqs": multires,
+            "log_sampling": True,
+            "periodic_fns": [torch.sin, torch.cos],
         }
 
         embedder_obj = Embedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj: eo.embed(x)
         out_dim = embedder_obj.out_dim
-    elif i == 1:
-        embed = HashEmbedder(bounding_box=args.bounding_box, \
-                             log2_hashmap_size=args.log2_hashmap_size, \
-                             finest_resolution=args.finest_res)
-        out_dim = embed.out_dim
-    elif i == 2:
-        embed = SHEncoder()
-        out_dim = embed.out_dim
+    # elif i == 1:
+    #     embed = HashEmbedder(bounding_box=args.bounding_box, \
+    #                          log2_hashmap_size=args.log2_hashmap_size, \
+    #                          finest_resolution=args.finest_res)
+    #     out_dim = embed.out_dim
+    # elif i == 2:
+    #     embed = SHEncoder()
+    #     out_dim = embed.out_dim
     return embed, out_dim
 
 
 # Small NeRF for Hash embeddings
 class NeRFSmall(nn.Module):
-    def __init__(self,
-                 num_layers=3,
-                 hidden_dim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=2,
-                 hidden_dim_color=16,
-                 input_ch=3,
-                 ):
+    def __init__(
+        self,
+        num_layers=3,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=3,
+    ):
         super(NeRFSmall, self).__init__()
 
         self.input_ch = input_ch
@@ -217,15 +219,17 @@ class NeRFSmall(nn.Module):
         sigma = h
         return sigma
 
+
 class NeRFSmall_c(nn.Module):
-    def __init__(self,
-                 num_layers=3,
-                 hidden_dim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=2,
-                 hidden_dim_color=16,
-                 input_ch=3,
-                 ):
+    def __init__(
+        self,
+        num_layers=3,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=3,
+    ):
         super(NeRFSmall_c, self).__init__()
 
         self.input_ch = input_ch
@@ -282,16 +286,16 @@ class NeRFSmall_c(nn.Module):
         return sigma[..., :1], color
 
 
-
 class NeRFSmall_bg(nn.Module):
-    def __init__(self,
-                 num_layers=3,
-                 hidden_dim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=2,
-                 hidden_dim_color=16,
-                 input_ch=3,
-                 ):
+    def __init__(
+        self,
+        num_layers=3,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=3,
+    ):
         super(NeRFSmall_bg, self).__init__()
 
         self.input_ch = input_ch
@@ -310,7 +314,7 @@ class NeRFSmall_bg(nn.Module):
                 in_dim = hidden_dim
 
             if l == num_layers - 1:
-                out_dim = 1 + geo_feat_dim # 1 sigma + 15 SH features for color
+                out_dim = 1 + geo_feat_dim  # 1 sigma + 15 SH features for color
             else:
                 out_dim = hidden_dim
 
@@ -356,17 +360,17 @@ class NeRFSmall_bg(nn.Module):
         return sigma, color
 
 
-
 class NeRFSmallPotential(nn.Module):
-    def __init__(self,
-                 num_layers=3,
-                 hidden_dim=64,
-                 geo_feat_dim=15,
-                 num_layers_color=2,
-                 hidden_dim_color=16,
-                 input_ch=3,
-                 use_f=False
-                 ):
+    def __init__(
+        self,
+        num_layers=3,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=3,
+        use_f=False,
+    ):
         super(NeRFSmallPotential, self).__init__()
 
         self.input_ch = input_ch
@@ -397,7 +401,6 @@ class NeRFSmallPotential(nn.Module):
             self.out_f = nn.Linear(hidden_dim, hidden_dim, bias=True)
             self.out_f2 = nn.Linear(hidden_dim, 3, bias=True)
 
-
     def forward(self, x):
         h = x
         for l in range(self.num_layers):
@@ -422,8 +425,9 @@ def save_quiver_plot(u, v, res, save_path, scale=0.00000002):
         res: resolution of the plot along the longest axis; if None, let step = 1
         save_path:
     """
-    import matplotlib.pyplot as plt
     import matplotlib
+    import matplotlib.pyplot as plt
+
     H, W = u.shape
     y, x = np.mgrid[0:H, 0:W]
     axis_len = max(H, W)
@@ -435,11 +439,11 @@ def save_quiver_plot(u, v, res, save_path, scale=0.00000002):
 
     uv_norm = np.sqrt(np.array(uq) ** 2 + np.array(vq) ** 2).max()
     short_len = min(H, W)
-    matplotlib.rcParams['font.size'] = 10 / short_len * axis_len
+    matplotlib.rcParams["font.size"] = 10 / short_len * axis_len
     fig, ax = plt.subplots(figsize=(10 / short_len * W, 10 / short_len * H))
-    q = ax.quiver(xq, yq, uq, vq, pivot='tail', angles='uv', scale_units='xy', scale=scale / step)
+    q = ax.quiver(xq, yq, uq, vq, pivot="tail", angles="uv", scale_units="xy", scale=scale / step)
     ax.invert_yaxis()
-    plt.quiverkey(q, X=0.6, Y=1.05, U=uv_norm, label=f'Max arrow length = {uv_norm:.2g}', labelpos='E')
+    plt.quiverkey(q, X=0.6, Y=1.05, U=uv_norm, label=f"Max arrow length = {uv_norm:.2g}", labelpos="E")
     plt.savefig(save_path)
     plt.close()
     return
@@ -447,32 +451,35 @@ def save_quiver_plot(u, v, res, save_path, scale=0.00000002):
 
 # Ray helpers
 def get_rays(H, W, K, c2w):
-    i, j = torch.meshgrid(torch.linspace(0, W - 1, W), torch.linspace(0, H - 1, H),
-                          indexing='ij')  # pytorch's meshgrid has indexing='ij'
+    i, j = torch.meshgrid(
+        torch.linspace(0, W - 1, W), torch.linspace(0, H - 1, H), indexing="ij"
+    )  # pytorch's meshgrid has indexing='ij'
     i = i.t()
     j = j.t()
     dirs = torch.stack([(i - K[0][2]) / K[0][0], -(j - K[1][2]) / K[1][1], -torch.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
-    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3, :3],
-                       -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = torch.sum(
+        dirs[..., np.newaxis, :] * c2w[:3, :3], -1
+    )  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = c2w[:3, -1].expand(rays_d.shape)
     return rays_o, rays_d
 
 
 def get_rays_np(H, W, K, c2w):
-    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing="xy")
     dirs = np.stack([(i - K[0][2]) / K[0][0], -(j - K[1][2]) / K[1][1], -np.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
-    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3, :3],
-                    -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = np.sum(
+        dirs[..., np.newaxis, :] * c2w[:3, :3], -1
+    )  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = np.broadcast_to(c2w[:3, -1], np.shape(rays_d))
     return rays_o, rays_d
 
 
 def get_rays_np_continuous(H, W, K, c2w):
-    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing="xy")
     random_offset_i = np.random.uniform(0, 1, size=(H, W))
     random_offset_j = np.random.uniform(0, 1, size=(H, W))
     i = i + random_offset_i
@@ -482,8 +489,9 @@ def get_rays_np_continuous(H, W, K, c2w):
 
     dirs = np.stack([(i - K[0][2]) / K[0][0], -(j - K[1][2]) / K[1][1], -np.ones_like(i)], -1)
     # Rotate ray directions from camera frame to the world frame
-    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3, :3],
-                    -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = np.sum(
+        dirs[..., np.newaxis, :] * c2w[:3, :3], -1
+    )  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
     # Translate camera frame's origin to the world frame. It is the origin of all rays.
     rays_o = np.broadcast_to(c2w[:3, -1], np.shape(rays_d))
     return rays_o, rays_d, i, j
@@ -495,13 +503,13 @@ def ndc_rays(H, W, focal, near, rays_o, rays_d):
     rays_o = rays_o + t[..., None] * rays_d
 
     # Projection
-    o0 = -1. / (W / (2. * focal)) * rays_o[..., 0] / rays_o[..., 2]
-    o1 = -1. / (H / (2. * focal)) * rays_o[..., 1] / rays_o[..., 2]
-    o2 = 1. + 2. * near / rays_o[..., 2]
+    o0 = -1.0 / (W / (2.0 * focal)) * rays_o[..., 0] / rays_o[..., 2]
+    o1 = -1.0 / (H / (2.0 * focal)) * rays_o[..., 1] / rays_o[..., 2]
+    o2 = 1.0 + 2.0 * near / rays_o[..., 2]
 
-    d0 = -1. / (W / (2. * focal)) * (rays_d[..., 0] / rays_d[..., 2] - rays_o[..., 0] / rays_o[..., 2])
-    d1 = -1. / (H / (2. * focal)) * (rays_d[..., 1] / rays_d[..., 2] - rays_o[..., 1] / rays_o[..., 2])
-    d2 = -2. * near / rays_o[..., 2]
+    d0 = -1.0 / (W / (2.0 * focal)) * (rays_d[..., 0] / rays_d[..., 2] - rays_o[..., 0] / rays_o[..., 2])
+    d1 = -1.0 / (H / (2.0 * focal)) * (rays_d[..., 1] / rays_d[..., 2] - rays_o[..., 1] / rays_o[..., 2])
+    d2 = -2.0 * near / rays_o[..., 2]
 
     rays_o = torch.stack([o0, o1, o2], -1)
     rays_d = torch.stack([d0, d1, d2], -1)
@@ -551,7 +559,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
 
     # Take uniform samples
     if det:
-        u = torch.linspace(0., 1., steps=N_samples)
+        u = torch.linspace(0.0, 1.0, steps=N_samples)
         u = u.expand(list(cdf.shape[:-1]) + [N_samples])
     else:
         u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
@@ -561,7 +569,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
         np.random.seed(0)
         new_shape = list(cdf.shape[:-1]) + [N_samples]
         if det:
-            u = np.linspace(0., 1., N_samples)
+            u = np.linspace(0.0, 1.0, N_samples)
             u = np.broadcast_to(u, new_shape)
         else:
             u = np.random.rand(*new_shape)
@@ -580,7 +588,7 @@ def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
     bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
 
-    denom = (cdf_g[..., 1] - cdf_g[..., 0])
+    denom = cdf_g[..., 1] - cdf_g[..., 0]
     denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
     t = (u - cdf_g[..., 0]) / denom
     samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])

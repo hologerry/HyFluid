@@ -1,14 +1,23 @@
 import numpy as np
 import taichi as ti
 import torch
+
 from taichi.math import uvec3, uvec4
 from torch.cuda.amp import custom_bwd, custom_fwd
-
 from torch.func import jacrev, vmap
 
-from .utils import (data_type, ti2torch, ti2torch_grad, ti2torch_grad_vec,
-                    ti2torch_vec, torch2ti, torch2ti_grad, torch2ti_grad_vec,
-                    torch2ti_vec, torch_type)
+from .utils import (
+    data_type,
+    ti2torch,
+    ti2torch_grad,
+    ti2torch_grad_vec,
+    ti2torch_vec,
+    torch2ti,
+    torch2ti_grad,
+    torch2ti_grad_vec,
+    torch2ti_vec,
+    torch_type,
+)
 
 
 @ti.kernel
@@ -74,12 +83,19 @@ def d_linear_step(t):
 def isnan(x):
     return not (x < 0 or 0 < x or x == 0)
 
+
 @ti.kernel
 def hash_encode_kernel_smoothstep(
-        xyzts: ti.template(), table: ti.template(),
-        xyzts_embedding: ti.template(), hash_map_indicator: ti.template(),
-        hash_map_sizes_field: ti.template(), hash_map_shapes_field: ti.template(),
-        offsets: ti.template(), B: ti.i32, num_scales: ti.i32):
+    xyzts: ti.template(),
+    table: ti.template(),
+    xyzts_embedding: ti.template(),
+    hash_map_indicator: ti.template(),
+    hash_map_sizes_field: ti.template(),
+    hash_map_shapes_field: ti.template(),
+    offsets: ti.template(),
+    B: ti.i32,
+    num_scales: ti.i32,
+):
     # # # get hash table embedding
     ti.loop_config(block_dim=16)
     for i, level in ti.ndrange(B, num_scales):
@@ -104,7 +120,7 @@ def hash_encode_kernel_smoothstep(
         local_feature_1 = 0.0
 
         for idx in ti.static(range(16)):
-            w = 1.
+            w = 1.0
             pos_grid_local = uvec4(0)
 
             for d in ti.static(range(4)):
@@ -128,10 +144,16 @@ def hash_encode_kernel_smoothstep(
 
 @ti.kernel
 def hash_encode_kernel(
-        xyzts: ti.template(), table: ti.template(),
-        xyzts_embedding: ti.template(), hash_map_indicator: ti.template(),
-        hash_map_sizes_field: ti.template(), hash_map_shapes_field: ti.template(),
-        offsets: ti.template(), B: ti.i32, num_scales: ti.i32):
+    xyzts: ti.template(),
+    table: ti.template(),
+    xyzts_embedding: ti.template(),
+    hash_map_indicator: ti.template(),
+    hash_map_sizes_field: ti.template(),
+    hash_map_shapes_field: ti.template(),
+    offsets: ti.template(),
+    B: ti.i32,
+    num_scales: ti.i32,
+):
     # # # get hash table embedding
     ti.loop_config(block_dim=16)
     for i, level in ti.ndrange(B, num_scales):
@@ -156,7 +178,7 @@ def hash_encode_kernel(
         local_feature_1 = 0.0
 
         for idx in ti.static(range(16)):
-            w = 1.
+            w = 1.0
             pos_grid_local = uvec4(0)
 
             for d in ti.static(range(4)):
@@ -180,11 +202,19 @@ def hash_encode_kernel(
 
 @ti.kernel
 def hash_encode_kernel_grad(
-        xyzts: ti.template(), table: ti.template(),
-        xyzts_embedding: ti.template(), hash_map_indicator: ti.template(),
-        hash_map_sizes_field: ti.template(), hash_map_shapes_field: ti.template(),
-        offsets: ti.template(), B: ti.i32, num_scales: ti.i32, xyzts_grad: ti.template(), table_grad: ti.template(),
-        output_grad: ti.template()):
+    xyzts: ti.template(),
+    table: ti.template(),
+    xyzts_embedding: ti.template(),
+    hash_map_indicator: ti.template(),
+    hash_map_sizes_field: ti.template(),
+    hash_map_shapes_field: ti.template(),
+    offsets: ti.template(),
+    B: ti.i32,
+    num_scales: ti.i32,
+    xyzts_grad: ti.template(),
+    table_grad: ti.template(),
+    output_grad: ti.template(),
+):
     # # # get hash table embedding
 
     ti.loop_config(block_dim=16)
@@ -210,9 +240,9 @@ def hash_encode_kernel_grad(
         local_feature_1 = 0.0
 
         for idx in ti.static(range(16)):
-            w = 1.
+            w = 1.0
             pos_grid_local = uvec4(0)
-            dw = ti.Vector([0., 0., 0., 0.])
+            dw = ti.Vector([0.0, 0.0, 0.0, 0.0])
             # prods = ti.Vector([0., 0., 0.,0.])
             for d in ti.static(range(4)):
                 t = linear_step(pos[d])
@@ -241,27 +271,43 @@ def hash_encode_kernel_grad(
                 #         prod *= dw[k]
                 #     else:
                 #         prod *= 1- linear_step(pos[k]) if (idx & (1 << k) == 0) else linear_step(pos[k])
-                prod = dw[d] * (
-                    linear_step(pos[(d + 1) % 4]) if (idx & (1 << ((d + 1) % 4)) > 0) else 1 - linear_step(
-                        pos[(d + 1) % 4])
-                ) * (
-                           linear_step(pos[(d + 2) % 4]) if (idx & (1 << ((d + 2) % 4)) > 0) else 1 - linear_step(
-                               pos[(d + 2) % 4])
-                       ) * (
-                           linear_step(pos[(d + 3) % 4]) if (idx & (1 << ((d + 3) % 4)) > 0) else 1 - linear_step(
-                               pos[(d + 3) % 4])
-                       )
+                prod = (
+                    dw[d]
+                    * (
+                        linear_step(pos[(d + 1) % 4])
+                        if (idx & (1 << ((d + 1) % 4)) > 0)
+                        else 1 - linear_step(pos[(d + 1) % 4])
+                    )
+                    * (
+                        linear_step(pos[(d + 2) % 4])
+                        if (idx & (1 << ((d + 2) % 4)) > 0)
+                        else 1 - linear_step(pos[(d + 2) % 4])
+                    )
+                    * (
+                        linear_step(pos[(d + 3) % 4])
+                        if (idx & (1 << ((d + 3) % 4)) > 0)
+                        else 1 - linear_step(pos[(d + 3) % 4])
+                    )
+                )
                 xyzts_grad[i, d] += table[index_table_int] * prod * plane_res[d] * output_grad[i, 2 * level]
                 xyzts_grad[i, d] += table[index_table_int + 1] * prod * plane_res[d] * output_grad[i, 2 * level + 1]
 
 
 @ti.kernel
 def hash_encode_kernel_smoothstep_grad(
-        xyzts: ti.template(), table: ti.template(),
-        xyzts_embedding: ti.template(), hash_map_indicator: ti.template(),
-        hash_map_sizes_field: ti.template(), hash_map_shapes_field: ti.template(),
-        offsets: ti.template(), B: ti.i32, num_scales: ti.i32, xyzts_grad: ti.template(), table_grad: ti.template(),
-        output_grad: ti.template()):
+    xyzts: ti.template(),
+    table: ti.template(),
+    xyzts_embedding: ti.template(),
+    hash_map_indicator: ti.template(),
+    hash_map_sizes_field: ti.template(),
+    hash_map_shapes_field: ti.template(),
+    offsets: ti.template(),
+    B: ti.i32,
+    num_scales: ti.i32,
+    xyzts_grad: ti.template(),
+    table_grad: ti.template(),
+    output_grad: ti.template(),
+):
     # # # get hash table embedding
 
     ti.loop_config(block_dim=16)
@@ -287,9 +333,9 @@ def hash_encode_kernel_smoothstep_grad(
         local_feature_1 = 0.0
 
         for idx in ti.static(range(16)):
-            w = 1.
+            w = 1.0
             pos_grid_local = uvec4(0)
-            dw = ti.Vector([0., 0., 0., 0.])
+            dw = ti.Vector([0.0, 0.0, 0.0, 0.0])
             # prods = ti.Vector([0., 0., 0.,0.])
             for d in ti.static(range(4)):
                 t = smooth_step(pos[d])
@@ -318,30 +364,39 @@ def hash_encode_kernel_smoothstep_grad(
                 #         prod *= dw[k]
                 #     else:
                 #         prod *= 1- smooth_step(pos[k]) if (idx & (1 << k) == 0) else smooth_step(pos[k])
-                prod = dw[d] * (
-                    smooth_step(pos[(d + 1) % 4]) if (idx & (1 << ((d + 1) % 4)) > 0) else 1 - smooth_step(
-                        pos[(d + 1) % 4])
-                ) * (
-                           smooth_step(pos[(d + 2) % 4]) if (idx & (1 << ((d + 2) % 4)) > 0) else 1 - smooth_step(
-                               pos[(d + 2) % 4])
-                       ) * (
-                           smooth_step(pos[(d + 3) % 4]) if (idx & (1 << ((d + 3) % 4)) > 0) else 1 - smooth_step(
-                               pos[(d + 3) % 4])
-                       )
+                prod = (
+                    dw[d]
+                    * (
+                        smooth_step(pos[(d + 1) % 4])
+                        if (idx & (1 << ((d + 1) % 4)) > 0)
+                        else 1 - smooth_step(pos[(d + 1) % 4])
+                    )
+                    * (
+                        smooth_step(pos[(d + 2) % 4])
+                        if (idx & (1 << ((d + 2) % 4)) > 0)
+                        else 1 - smooth_step(pos[(d + 2) % 4])
+                    )
+                    * (
+                        smooth_step(pos[(d + 3) % 4])
+                        if (idx & (1 << ((d + 3) % 4)) > 0)
+                        else 1 - smooth_step(pos[(d + 3) % 4])
+                    )
+                )
                 xyzts_grad[i, d] += table[index_table_int] * prod * plane_res[d] * output_grad[i, 2 * level]
                 xyzts_grad[i, d] += table[index_table_int + 1] * prod * plane_res[d] * output_grad[i, 2 * level + 1]
 
 
 class Hash4Encoder(torch.nn.Module):
-    def __init__(self,
-                 max_res=np.array([512, 512, 512, 512]),
-                 min_res=np.array([16, 16, 16, 16]),
-                 num_scales=16,
-                 max_num_queries=10000000,
-                 data_type=data_type,
-                 max_params=2 ** 19,
-                 interpolation='linear'
-                 ):
+    def __init__(
+        self,
+        max_res=np.array([512, 512, 512, 512]),
+        min_res=np.array([16, 16, 16, 16]),
+        num_scales=16,
+        max_num_queries=10000000,
+        data_type=data_type,
+        max_params=2**19,
+        interpolation="linear",
+    ):
         super(Hash4Encoder, self).__init__()
 
         b = np.exp((np.log(max_res) - np.log(min_res)) / (num_scales - 1))
@@ -359,15 +414,20 @@ class Hash4Encoder(torch.nn.Module):
         for i in range(num_scales):  # loop through each level
             res = np.ceil(min_res * np.power(b, i)).astype(int)
             hash_map_shapes.append(res)
-            params_in_level_raw = (res[0] + 1) * (res[1] + 1) * (
-                    res[2] + 1) * (res[3] + 1)  # number of params required to store everything
-            params_in_level = int(params_in_level_raw) if params_in_level_raw % 8 == 0 \
-                else int((params_in_level_raw + 8 - 1) / 8) * 8  # make sure is multiple of 8
+            params_in_level_raw = (
+                (res[0] + 1) * (res[1] + 1) * (res[2] + 1) * (res[3] + 1)
+            )  # number of params required to store everything
+            params_in_level = (
+                int(params_in_level_raw)
+                if params_in_level_raw % 8 == 0
+                else int((params_in_level_raw + 8 - 1) / 8) * 8
+            )  # make sure is multiple of 8
             # if max_params has enough space, store everything; otherwise store as much as we can
             params_in_level = min(max_params, params_in_level)
             hash_map_sizes.append(params_in_level)
-            self.hash_map_indicator[
-                i] = 1 if params_in_level_raw <= params_in_level else 0  # i if have stored everything, 0 if collision
+            self.hash_map_indicator[i] = (
+                1 if params_in_level_raw <= params_in_level else 0
+            )  # i if have stored everything, 0 if collision
             self.offsets[i] = offset_
             offset_ += params_in_level * 2  # multiply by two because we store 2 features per entry
         print("hash map sizes", hash_map_sizes)
@@ -382,75 +442,41 @@ class Hash4Encoder(torch.nn.Module):
         self.total_hash_size = offset_
 
         # the main storage, pytorch
-        self.hash_table = torch.nn.Parameter(torch.zeros(self.total_hash_size,
-                                                         dtype=torch_type),
-                                             requires_grad=True)
+        self.hash_table = torch.nn.Parameter(torch.zeros(self.total_hash_size, dtype=torch_type), requires_grad=True)
         random_initialize(self.hash_table)  # randomly initialize
 
         # the taichi counterpart of self.hash_table
-        self.parameter_fields = ti.field(data_type,
-                                         shape=(self.total_hash_size,),
-                                         needs_grad=True)
+        self.parameter_fields = ti.field(data_type, shape=(self.total_hash_size,), needs_grad=True)
 
         # output fields will have num_scales * 2 entries (2 features per scale)
-        self.output_fields = ti.field(dtype=data_type,
-                                      shape=(max_num_queries, num_scales * 2),
-                                      needs_grad=True)
-        if interpolation == 'linear':
+        self.output_fields = ti.field(dtype=data_type, shape=(max_num_queries, num_scales * 2), needs_grad=True)
+        if interpolation == "linear":
             self._hash_encode_kernel = hash_encode_kernel
             self._hash_encode_kernel_grad = hash_encode_kernel_grad
-        elif interpolation == 'smoothstep':
+        elif interpolation == "smoothstep":
             self._hash_encode_kernel = hash_encode_kernel_smoothstep
             self._hash_encode_kernel_grad = hash_encode_kernel_smoothstep_grad
         else:
             raise NotImplementedError
         # input assumes a dimension of 4
-        self.input_fields = ti.field(dtype=data_type,
-                                     shape=(max_num_queries, 4),
-                                     needs_grad=True)
-        self.input_fields_grad = ti.field(dtype=data_type,
-                                          shape=(max_num_queries, 4),
-                                          needs_grad=True)
-        self.parameter_fields_grad = ti.field(dtype=data_type,
-                                              shape=(self.total_hash_size,),
-                                              needs_grad=True)
-        self.output_grad = ti.field(dtype=data_type,
-                                    shape=(max_num_queries, num_scales * 2),
-                                    needs_grad=True)
+        self.input_fields = ti.field(dtype=data_type, shape=(max_num_queries, 4), needs_grad=True)
+        self.input_fields_grad = ti.field(dtype=data_type, shape=(max_num_queries, 4), needs_grad=True)
+        self.parameter_fields_grad = ti.field(dtype=data_type, shape=(self.total_hash_size,), needs_grad=True)
+        self.output_grad = ti.field(dtype=data_type, shape=(max_num_queries, num_scales * 2), needs_grad=True)
 
+        self.register_buffer("hash_grad", torch.zeros(self.total_hash_size, dtype=torch_type), persistent=False)
+        self.register_buffer("hash_grad2", torch.zeros(self.total_hash_size, dtype=torch_type), persistent=False)
+        self.register_buffer("input_grad", torch.zeros(max_num_queries, 4, dtype=torch_type), persistent=False)
+        self.register_buffer("input_grad2", torch.zeros(max_num_queries, 4, dtype=torch_type), persistent=False)
         self.register_buffer(
-            'hash_grad',
-            torch.zeros(self.total_hash_size, dtype=torch_type),
-            persistent=False
-        )
-        self.register_buffer(
-            'hash_grad2',
-            torch.zeros(self.total_hash_size, dtype=torch_type),
-            persistent=False
-        )
-        self.register_buffer(
-            'input_grad',
-            torch.zeros(max_num_queries, 4, dtype=torch_type),
-            persistent=False
-        )
-        self.register_buffer(
-            'input_grad2',
-            torch.zeros(max_num_queries, 4, dtype=torch_type),
-            persistent=False
-        )
-        self.register_buffer(
-            'output_embedding',
-            torch.zeros(max_num_queries, num_scales * 2, dtype=torch_type),
-            persistent=False
+            "output_embedding", torch.zeros(max_num_queries, num_scales * 2, dtype=torch_type), persistent=False
         )
 
         class _module_function(torch.autograd.Function):
             @staticmethod
             @custom_fwd(cast_inputs=torch_type)
             def forward(ctx, input_pos, params):
-                output_embedding = self.output_embedding[:input_pos.
-                    shape[0]].contiguous(
-                )
+                output_embedding = self.output_embedding[: input_pos.shape[0]].contiguous()
                 torch2ti(self.input_fields, input_pos.contiguous())
                 torch2ti(self.parameter_fields, params.contiguous())
 
@@ -481,9 +507,7 @@ class Hash4Encoder(torch.nn.Module):
             @staticmethod
             @custom_fwd(cast_inputs=torch_type)
             def forward(ctx, input_pos, params):
-                output_embedding = self.output_embedding[:input_pos.
-                    shape[0]].contiguous(
-                )
+                output_embedding = self.output_embedding[: input_pos.shape[0]].contiguous()
                 torch2ti(self.input_fields, input_pos.contiguous())
                 torch2ti(self.parameter_fields, params.contiguous())
 
@@ -519,10 +543,9 @@ class Hash4Encoder(torch.nn.Module):
                     doutput.shape[0],
                     self.num_scales,
                 )
-                ti2torch_grad(self.parameter_fields,
-                              self.hash_grad.contiguous())
-                ti2torch_grad(self.input_fields, self.input_grad.contiguous()[:doutput.shape[0]])
-                return self.input_grad[:doutput.shape[0]], self.hash_grad
+                ti2torch_grad(self.parameter_fields, self.hash_grad.contiguous())
+                ti2torch_grad(self.input_fields, self.input_grad.contiguous()[: doutput.shape[0]])
+                return self.input_grad[: doutput.shape[0]], self.hash_grad
 
         class _module_function_grad(torch.autograd.Function):
             @staticmethod
@@ -543,12 +566,12 @@ class Hash4Encoder(torch.nn.Module):
                     self.num_scales,
                     self.input_fields_grad,
                     self.parameter_fields_grad,
-                    self.output_grad
+                    self.output_grad,
                 )
 
                 ti2torch(self.input_fields_grad, self.input_grad.contiguous())
                 ti2torch(self.parameter_fields_grad, self.hash_grad.contiguous())
-                return self.input_grad[:doutput.shape[0]], self.hash_grad
+                return self.input_grad[: doutput.shape[0]], self.hash_grad
 
             @staticmethod
             @custom_bwd
@@ -568,25 +591,25 @@ class Hash4Encoder(torch.nn.Module):
                     self.num_scales,
                     self.input_fields_grad,
                     self.parameter_fields_grad,
-                    self.output_grad
+                    self.output_grad,
                 )
-                ti2torch_grad(self.input_fields, self.input_grad2.contiguous()[:d_input_grad.shape[0]])
+                ti2torch_grad(self.input_fields, self.input_grad2.contiguous()[: d_input_grad.shape[0]])
                 ti2torch_grad(self.parameter_fields, self.hash_grad2.contiguous())
                 # set_trace(term_size=(120,30))
-                return self.input_grad2[:d_input_grad.shape[0]], self.hash_grad2, None
+                return self.input_grad2[: d_input_grad.shape[0]], self.hash_grad2, None
 
         self._module_function = _module_function
         self._module_function_grad = _module_function_grad
 
     def zero_grad(self):
-        self.parameter_fields.grad.fill(0.)
-        self.input_fields.grad.fill(0.)
-        self.input_fields_grad.fill(0.)
-        self.parameter_fields_grad.fill(0.)
+        self.parameter_fields.grad.fill(0.0)
+        self.input_fields.grad.fill(0.0)
+        self.input_fields_grad.fill(0.0)
+        self.parameter_fields_grad.fill(0.0)
 
     def zero_grad_2(self):
-        self.parameter_fields.grad.fill(0.)
-        self.input_fields.grad.fill(0.)
+        self.parameter_fields.grad.fill(0.0)
+        self.input_fields.grad.fill(0.0)
         # self.input_fields_grad.grad.fill(0.)
         # self.parameter_fields_grad.grad.fill(0.)
 
@@ -595,7 +618,8 @@ class Hash4Encoder(torch.nn.Module):
         positions = positions * 0.5 + 0.5
         return self._module_function.apply(positions, self.hash_table)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     ti.init(arch=ti.cpu, device_memory_GB=4.0)
 
     import torch.nn as nn
@@ -603,17 +627,17 @@ if __name__ == '__main__':
 
     print(torch.__version__)
 
-
     class NeRFSmallPotential(nn.Module):
-        def __init__(self,
-                     num_layers=3,
-                     hidden_dim=64,
-                     geo_feat_dim=15,
-                     num_layers_color=2,
-                     hidden_dim_color=16,
-                     input_ch=3,
-                     use_f=False
-                     ):
+        def __init__(
+            self,
+            num_layers=3,
+            hidden_dim=64,
+            geo_feat_dim=15,
+            num_layers_color=2,
+            hidden_dim_color=16,
+            input_ch=3,
+            use_f=False,
+        ):
             super(NeRFSmallPotential, self).__init__()
 
             self.input_ch = input_ch
@@ -659,8 +683,6 @@ if __name__ == '__main__':
                 f = v * 0
             return v, f
 
-
-
     # embedding = h(x)
     network_vel = NeRFSmallPotential(input_ch=32)
     embed_vel = Hash4Encoder()
@@ -671,19 +693,20 @@ if __name__ == '__main__':
         h = embed_vel(pts)
         vel_output, f_output = network_vel(h)
 
-        print('vel_output', vel_output.shape)
-        print('h', h.shape)
+        print("vel_output", vel_output.shape)
+        print("h", h.shape)
+
         def g(x):
             return network_vel(x)[0]
 
         jac = vmap(jacrev(g))(h)
-        print('jac', jac.shape)
-        jac_x = [] #_get_minibatch_jacobian(h, pts)
+        print("jac", jac.shape)
+        jac_x = []  # _get_minibatch_jacobian(h, pts)
         for j in range(h.shape[1]):
             dy_j_dx = torch.autograd.grad(
                 h[:, j],
                 pts,
-                torch.ones_like(h[:, j], device='cpu'),
+                torch.ones_like(h[:, j], device="cpu"),
                 retain_graph=True,
                 create_graph=True,
             )[0].view(pts.shape[0], -1)
@@ -695,9 +718,9 @@ if __name__ == '__main__':
         _u_x, _u_y, _u_z, _u_t = [torch.squeeze(_, -1) for _ in jac.split(1, dim=-1)]  # (N,1)
 
     jac = torch.stack([_u_x, _u_y, _u_z], dim=-1)  # [N, 3, 3]
-    curl = torch.stack([jac[:, 2, 1] - jac[:, 1, 2],
-                        jac[:, 0, 2] - jac[:, 2, 0],
-                        jac[:, 1, 0] - jac[:, 0, 1]], dim=-1)  # [N, 3]
+    curl = torch.stack(
+        [jac[:, 2, 1] - jac[:, 1, 2], jac[:, 0, 2] - jac[:, 2, 0], jac[:, 1, 0] - jac[:, 0, 1]], dim=-1
+    )  # [N, 3]
     # curl = curl.view(list(pts_shape[:-1]) + [3])  # [..., 3]
     print(curl.shape)
     vorticity_norm = torch.norm(curl, dim=-1, keepdim=True)
@@ -711,7 +734,7 @@ if __name__ == '__main__':
         dy_j_dx = torch.autograd.grad(
             vorticity_norm[:, j],
             pts,
-            torch.ones_like(vorticity_norm[:, j], device='cpu'),
+            torch.ones_like(vorticity_norm[:, j], device="cpu"),
             retain_graph=True,
             create_graph=True,
         )[0]
