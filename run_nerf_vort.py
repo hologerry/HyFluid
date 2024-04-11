@@ -266,7 +266,12 @@ def create_nerf(args):
     embedding_params = list(embed_fn.parameters())
 
     model = NeRFSmall(
-        num_layers=2, hidden_dim=64, geo_feat_dim=15, num_layers_color=2, hidden_dim_color=16, input_ch=input_ch
+        num_layers=2,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=input_ch,
     ).to(device)
     print(model)
     print(
@@ -349,7 +354,10 @@ def create_vel_nerf(args):
     )
 
     embed_fn = Hash4Encoder(
-        max_res=max_res, min_res=min_res, num_scales=args.num_levels, max_params=2**args.log2_hashmap_size
+        max_res=max_res,
+        min_res=min_res,
+        num_scales=args.num_levels,
+        max_params=2**args.log2_hashmap_size,
     )
     input_ch = embed_fn.num_scales * 2  # default 2 params per scale
     embedding_params = list(embed_fn.parameters())
@@ -880,10 +888,7 @@ def train():
             file.write(open(args.config, "r").read())
 
     # Create nerf model
-    bds_dict = {
-        "near": near,
-        "far": far,
-    }
+    bds_dict = {"near": near, "far": far}
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)

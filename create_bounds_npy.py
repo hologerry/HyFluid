@@ -70,6 +70,7 @@ print("far", far)
 poses_path = "data/ScalarReal/poses.npy"
 inv_poses_path = "data/ScalarReal/inv_poses.npy"
 sp_poses_path = "data/ScalarReal/sp_poses.npy"
+
 np.save(poses_path, poses)
 np.save(sp_poses_path, render_poses.numpy())
 
@@ -81,37 +82,37 @@ print(poses[0, :, :])
 
 print(inv_poses[0, :, :])
 
-poses_bounds_hwf = hwf.reshape([3, 1])
-poses_bounds_poses = poses[:, :3, :4]  # [V, 3, 4]
+# poses_bounds_hwf = hwf.reshape([3, 1])
+# poses_bounds_poses = poses[:, :3, :4]  # [V, 3, 4]
 
-poses_bounds_poses = np.concatenate(
-    [poses_bounds_poses, np.tile(poses_bounds_hwf[np.newaxis, ...], [poses_bounds_poses.shape[0], 1, 1])], 2
-)
+# poses_bounds_poses = np.concatenate(
+#     [poses_bounds_poses, np.tile(poses_bounds_hwf[np.newaxis, ...], [poses_bounds_poses.shape[0], 1, 1])], 2
+# )
 
-print(poses_bounds_poses.shape)
+# print(poses_bounds_poses.shape)
 
-# must switch to [-u, r, -t] from [r, -u, t], NOT [r, u, -t]
-# must switch to [-u, r, -t] from [r, u, -t]
-poses_bounds_poses = np.concatenate(
-    [
-        poses_bounds_poses[:, 1:2, :],
-        poses_bounds_poses[:, 0:1, :],
-        poses_bounds_poses[:, 2:3, :],
-        poses_bounds_poses[:, 3:4, :],
-        poses_bounds_poses[:, 4:5, :],
-    ],
-    1,
-)
-print(poses_bounds_poses.shape)
-poses_bounds_poses = poses_bounds_poses.reshape([poses_bounds_poses.shape[0], 15])
-near_depth = near
-far_depth = far
-poses_bounds_depth = np.array([near_depth, far_depth])
-poses_bounds = np.concatenate(
-    [poses_bounds_poses, np.tile(poses_bounds_depth[np.newaxis, :], [poses_bounds_poses.shape[0], 1])], 1
-)
+# # must switch to [-u, r, -t] from [r, -u, t], NOT [r, u, -t]
+# # must switch to [-u, r, -t] from [r, u, -t]
+# poses_bounds_poses = np.concatenate(
+#     [
+#         poses_bounds_poses[:, 1:2, :],
+#         poses_bounds_poses[:, 0:1, :],
+#         poses_bounds_poses[:, 2:3, :],
+#         poses_bounds_poses[:, 3:4, :],
+#         poses_bounds_poses[:, 4:5, :],
+#     ],
+#     1,
+# )
+# print(poses_bounds_poses.shape)
+# poses_bounds_poses = poses_bounds_poses.reshape([poses_bounds_poses.shape[0], 15])
+# near_depth = near
+# far_depth = far
+# poses_bounds_depth = np.array([near_depth, far_depth])
+# poses_bounds = np.concatenate(
+#     [poses_bounds_poses, np.tile(poses_bounds_depth[np.newaxis, :], [poses_bounds_poses.shape[0], 1])], 1
+# )
 
-print(poses_bounds.shape)
+# print(poses_bounds.shape)
 
-poses_bounds_path = "data/ScalarReal/poses_bounds.npy"
-np.save(poses_bounds_path, poses_bounds)
+# poses_bounds_path = "data/ScalarReal/poses_bounds.npy"
+# np.save(poses_bounds_path, poses_bounds)

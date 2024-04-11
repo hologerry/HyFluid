@@ -76,6 +76,7 @@ def PDE_EQs(D_t, D_x, D_y, D_z, U, F, U_t=None, U_x=None, U_y=None, U_z=None, de
     dys = [D_y]
     dzs = [D_z]
 
+    # why set all values to zero?
     F = torch.cat([torch.zeros_like(F[:, :1]), F], dim=1) * 0  # (N,4)
     u, v, w = U.split(1, dim=-1)  # (N,1)
     F_t, F_x, F_y, F_z = F.split(1, dim=-1)  # (N,1)
@@ -877,10 +878,7 @@ def train():
             file.write(open(args.config, "r").read())
 
     # Create nerf model
-    bds_dict = {
-        "near": near,
-        "far": far,
-    }
+    bds_dict = {"near": near, "far": far}
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
@@ -895,7 +893,7 @@ def train():
     if args.render_only:
         print("RENDER ONLY")
         with torch.no_grad():
-            testsavedir = os.path.join(basedir, expname, "renderonly_{:06d}".format(start))
+            testsavedir = os.path.join(basedir, expname, "render_only_{:06d}".format(start))
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
             N_timesteps = images_test.shape[0]
@@ -915,6 +913,7 @@ def train():
                 **render_kwargs_test,
             )
             return
+
     if args.run_advect_den:
         print("Run advect density.")
         with torch.no_grad():

@@ -75,12 +75,12 @@ def render(H, W, K, rays=None, c2w=None, near=0.0, far=1.0, time_step=None, **kw
     rays_d = torch.reshape(rays_d, [-1, 3]).float()
 
     near, far = near * torch.ones_like(rays_d[..., :1]), far * torch.ones_like(rays_d[..., :1])
-    rays = torch.cat([rays_o, rays_d, near, far], -1)
+    rays = torch.cat([rays_o, rays_d, near, far], -1)  # [N_r, 3+3+1+1]
     time_step = time_step[:, None, None]  # [N_t, 1, 1]
     N_t = time_step.shape[0]
     N_r = rays.shape[0]
-    rays = torch.cat([rays[None].expand(N_t, -1, -1), time_step.expand(-1, N_r, -1)], -1)  # [N_t, n_rays, 7]
-    rays = rays.flatten(0, 1)  # [n_time_steps * n_rays, 7]
+    rays = torch.cat([rays[None].expand(N_t, -1, -1), time_step.expand(-1, N_r, -1)], -1)  # [N_t, n_rays, 9]
+    rays = rays.flatten(0, 1)  # [n_time_steps * n_rays, 9]
 
     # Render and reshape
     all_ret = batchify_rays(rays, **kwargs)
@@ -342,10 +342,15 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
     out_dim = 1
     raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
 
+    np.savetxt("pts_flat.txt", pts_flat.cpu().numpy())
+
     bbox_mask = bbox_model.insideMask(pts_flat[..., :3], to_float=False)
+
     if bbox_mask.sum() == 0:
         bbox_mask[0] = True  # in case zero rays are inside the bbox
     pts = pts_flat[bbox_mask]
+
+    np.savetxt("pts.txt", pts.cpu().numpy())
 
     raw_flat[bbox_mask] = network_query_fn(pts)
     raw = raw_flat.reshape(N_rays, N_samples, out_dim)
@@ -467,24 +472,23 @@ def train():
         with torch.no_grad():
             testsavedir = os.path.join(basedir, expname, f"testset_{start:06d}")
             os.makedirs(testsavedir, exist_ok=True)
-            with torch.no_grad():
-                test_view_pose = torch.tensor(poses_test[0])
-                N_timesteps = images_test.shape[0]
-                test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
-                test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-                print(test_view_poses.shape)
-                test_view_poses = torch.tensor(poses_train[0]).unsqueeze(0).repeat(N_timesteps, 1, 1)
-                print(test_view_poses.shape)
-                render_path(
-                    test_view_poses,
-                    hwf,
-                    K,
-                    render_kwargs_test,
-                    time_steps=test_timesteps,
-                    gt_imgs=images_test,
-                    savedir=testsavedir,
-                )
-            return
+            test_view_pose = torch.tensor(poses_test[0])
+            N_timesteps = images_test.shape[0]
+            test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
+            test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
+            print(test_view_poses.shape)
+            test_view_poses = torch.tensor(poses_train[0]).unsqueeze(0).repeat(N_timesteps, 1, 1)
+            print(test_view_poses.shape)
+            render_path(
+                test_view_poses,
+                hwf,
+                K,
+                render_kwargs_test,
+                time_steps=test_timesteps,
+                gt_imgs=images_test,
+                savedir=testsavedir,
+            )
+        return
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
