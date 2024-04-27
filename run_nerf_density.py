@@ -2,6 +2,7 @@ import json
 import os
 
 import imageio
+import lovely_tensors as lt
 import lpips
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +13,7 @@ from skimage.metrics import structural_similarity
 from tqdm import tqdm, trange
 
 from load_scalarflow import load_pinf_frame_data
+from parser_helper import config_parser_dense as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
@@ -367,55 +369,6 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
     return ret
 
 
-def config_parser():
-    import configargparse
-
-    parser = configargparse.ArgumentParser()
-    parser.add_argument("--config", is_config_file=True, help="config file path")
-    parser.add_argument("--expname", type=str, help="experiment name")
-    parser.add_argument("--basedir", type=str, default="./logs/", help="where to store ckpts and logs")
-    parser.add_argument("--datadir", type=str, default="./data/llff/fern", help="input data directory")
-
-    # training options
-    parser.add_argument("--encoder", type=str, default="ingp", choices=["ingp", "plane"])
-    parser.add_argument(
-        "--N_rand", type=int, default=32 * 32 * 4, help="batch size (number of random rays per gradient step)"
-    )
-    parser.add_argument("--N_time", type=int, default=1, help="batch size in time")
-    parser.add_argument("--lrate", type=float, default=5e-4, help="learning rate")
-    parser.add_argument("--lrate_decay", type=int, default=250, help="exponential learning rate decay")
-    parser.add_argument("--N_iters", type=int, default=50000)
-    parser.add_argument("--no_reload", action="store_true", help="do not reload weights from saved ckpt")
-    parser.add_argument(
-        "--ft_path", type=str, default=None, help="specific weights npy file to reload for coarse network"
-    )
-
-    # rendering options
-    parser.add_argument("--N_samples", type=int, default=64, help="number of coarse samples per ray")
-    parser.add_argument("--perturb", type=float, default=1.0, help="set to 0. for no jitter, 1. for jitter")
-
-    parser.add_argument(
-        "--render_only", action="store_true", help="do not optimize, reload weights and render out render_poses path"
-    )
-    parser.add_argument("--half_res", action="store_true", help="load at half resolution")
-
-    # logging/saving options
-    parser.add_argument("--i_print", type=int, default=100, help="frequency of console printout and metric logging")
-    parser.add_argument("--i_weights", type=int, default=10000, help="frequency of weight ckpt saving")
-    parser.add_argument("--i_video", type=int, default=9999999, help="frequency of render_poses video saving")
-
-    parser.add_argument("--finest_resolution", type=int, default=512, help="finest resolution for hashed embedding")
-    parser.add_argument("--finest_resolution_t", type=int, default=512, help="finest resolution for hashed embedding")
-    parser.add_argument("--num_levels", type=int, default=16, help="number of levels for hashed embedding")
-    parser.add_argument("--base_resolution", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--base_resolution_t", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--log2_hashmap_size", type=int, default=19, help="log2 of hashmap size")
-    parser.add_argument("--feats_dim", type=int, default=36, help="feature dimension of kplanes")
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6, help="learning rate")
-
-    return parser
-
-
 def train():
     parser = config_parser()
     args = parser.parse_args()
@@ -658,6 +611,7 @@ def train():
 if __name__ == "__main__":
     import taichi as ti
 
+    lt.monkey_patch()
     ti.init(arch=ti.cuda, device_memory_GB=6.0)
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
     import ipdb

@@ -1030,7 +1030,7 @@ def pos_world2smoke(Pworld, w2s, scale_vector):
 class BBoxTool(object):
     def __init__(self, smoke_tran_inv, smoke_scale, in_min=[0.15, 0.0, 0.15], in_max=[0.85, 1.0, 0.85]):
         self.s_w2s = torch.tensor(smoke_tran_inv).expand([4, 4]).float()
-        print(f"self.s_w2s")
+        print(f"self.s_w2s {self.s_w2s}")
         self.s2w = torch.inverse(self.s_w2s)
         self.s_scale = torch.tensor(smoke_scale.copy()).expand([3]).float()
         self.s_min = torch.Tensor(in_min)

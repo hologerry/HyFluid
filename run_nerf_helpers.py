@@ -14,6 +14,12 @@ mse2psnr = lambda x: -10.0 * torch.log(x) / torch.log(torch.Tensor([10.0]))
 to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
 
+def mean_squared_error(pred, exact):
+    if type(pred) is np.ndarray:
+        return np.mean(np.square(pred - exact))
+    return torch.mean(torch.square(pred - exact))
+
+
 def batchify_query(inputs, query_function, batch_size=2**22):
     """
     args:

@@ -87,7 +87,7 @@ def load_pinf_frame_data(basedir, half_res=False, split="train"):
             camera_angle_x = float(train_video["camera_angle_x"])
             Focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
 
-            print(f"video {train_video['file_name']} focal {Focal}")
+            # print(f"video {train_video['file_name']} focal {Focal}")
             reader.close()
             imgs = np.float32(imgs) / 255.0
 

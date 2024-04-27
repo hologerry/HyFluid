@@ -1,26 +1,28 @@
 import math
 import time
 
-from .taichi_utils import *
+import taichi as ti
+
+from .taichi_utils import get_central_vector, sample, split_central_vector
 
 
 @ti.data_oriented
 class MGPCG:
-    '''
-Grid-based MGPCG solver for the possion equation.
+    """
+    Grid-based MGPCG solver for the poisson equation.
 
-.. note::
+    .. note::
 
-    This solver only runs on CPU and CUDA backends since it requires the
-    ``pointer`` SNode.
-    '''
+        This solver only runs on CPU and CUDA backends since it requires the
+        ``pointer`` SNode.
+    """
 
     def __init__(self, boundary_types, N, dim=2, base_level=3, real=float):
-        '''
+        """
         :parameter dim: Dimensionality of the fields.
         :parameter N: Grid resolutions.
         :parameter n_mg_levels: Number of multigrid levels.
-        '''
+        """
 
         # grid parameters
         self.use_multigrid = True
@@ -33,10 +35,8 @@ Grid-based MGPCG solver for the possion equation.
         self.real = real
 
         # setup sparse simulation data arrays
-        self.r = [ti.field(dtype=self.real)
-                  for _ in range(self.n_mg_levels)]  # residual
-        self.z = [ti.field(dtype=self.real)
-                  for _ in range(self.n_mg_levels)]  # M^-1 self.r
+        self.r = [ti.field(dtype=self.real) for _ in range(self.n_mg_levels)]  # residual
+        self.z = [ti.field(dtype=self.real) for _ in range(self.n_mg_levels)]  # M^-1 self.r
         self.x = ti.field(dtype=self.real)  # solution
         self.p = ti.field(dtype=self.real)  # conjugate gradient
         self.Ap = ti.field(dtype=self.real)  # matrix-vector product
@@ -47,14 +47,14 @@ Grid-based MGPCG solver for the possion equation.
         self.num_entries = math.prod(self.N)
 
         indices = ti.ijk if self.dim == 3 else ti.ij
-        self.grid = ti.root.pointer(indices, [n // 4 for n in self.N]).dense(
-            indices, 4).place(self.x, self.p, self.Ap)
+        self.grid = ti.root.pointer(indices, [n // 4 for n in self.N]).dense(indices, 4).place(self.x, self.p, self.Ap)
 
         for l in range(self.n_mg_levels):
-            self.grid = ti.root.pointer(indices,
-                                        [n // (4 * 2 ** l) for n in self.N]).dense(
-                indices,
-                4).place(self.r[l], self.z[l])
+            self.grid = (
+                ti.root.pointer(indices, [n // (4 * 2**l) for n in self.N])
+                .dense(indices, 4)
+                .place(self.r[l], self.z[l])
+            )
 
         ti.root.place(self.alpha, self.beta, self.sum, self.r_mean)
 
@@ -70,21 +70,21 @@ Grid-based MGPCG solver for the possion equation.
 
     @ti.kernel
     def init(self, r: ti.template(), k: ti.template()):
-        '''
+        """
         Set up the solver for $\nabla^2 x = k r$, a scaled Poisson problem.
         :parameter k: (scalar) A scaling factor of the right-hand side.
         :parameter r: (ti.field) Unscaled right-hand side.
-        '''
+        """
         for I in ti.grouped(ti.ndrange(*self.N)):
             self.init_r(I, r[I] * k)
 
     @ti.kernel
     def get_result(self, x: ti.template()):
-        '''
+        """
         Get the solution field.
 
         :parameter x: (ti.field) The field to store the solution
-        '''
+        """
         for I in ti.grouped(ti.ndrange(*self.N)):
             x[I] = self.x[I]
 
@@ -117,15 +117,13 @@ Grid-based MGPCG solver for the possion equation.
     def compute_Ap(self):
         for I in ti.grouped(self.Ap):
             multiplier = self.num_fluid_neighbors(self.p, I)
-            self.Ap[I] = multiplier * self.p[I] - self.neighbor_sum(
-                self.p, I)
+            self.Ap[I] = multiplier * self.p[I] - self.neighbor_sum(self.p, I)
 
     @ti.kernel
     def get_Ap(self, p: ti.template(), Ap: ti.template()):
         for I in ti.grouped(Ap):
             multiplier = self.num_fluid_neighbors(p, I)
-            Ap[I] = multiplier * p[I] - self.neighbor_sum(
-                p, I)
+            Ap[I] = multiplier * p[I] - self.neighbor_sum(p, I)
 
     @ti.kernel
     def reduce(self, p: ti.template(), q: ti.template()):
@@ -152,8 +150,7 @@ Grid-based MGPCG solver for the possion equation.
     def restrict(self, l: ti.template()):
         for I in ti.grouped(self.r[l]):
             multiplier = self.num_fluid_neighbors(self.z[l], I)
-            res = self.r[l][I] - (multiplier * self.z[l][I] -
-                                  self.neighbor_sum(self.z[l], I))
+            res = self.r[l][I] - (multiplier * self.z[l][I] - self.neighbor_sum(self.z[l], I))
             self.r[l + 1][I // 2] += res * 1.0 / (self.dim - 1.0)
 
     @ti.kernel
@@ -167,8 +164,7 @@ Grid-based MGPCG solver for the possion equation.
         for I in ti.grouped(self.r[l]):
             if (I.sum()) & 1 == phase:
                 multiplier = self.num_fluid_neighbors(self.z[l], I)
-                self.z[l][I] = (self.r[l][I] + self.neighbor_sum(
-                    self.z[l], I)) / multiplier
+                self.z[l][I] = (self.r[l][I] + self.neighbor_sum(self.z[l], I)) / multiplier
 
     @ti.kernel
     def recenter(self, r: ti.template()):  # so that the mean value of r is 0
@@ -198,20 +194,16 @@ Grid-based MGPCG solver for the possion equation.
                 self.smooth(l, 1)
                 self.smooth(l, 0)
 
-    def solve(self,
-              max_iters=-1,
-              eps=1e-12,
-              tol=1e-12,
-              verbose=False):
-        '''
+    def solve(self, max_iters=-1, eps=1e-12, tol=1e-12, verbose=False):
+        """
         Solve a Poisson problem.
 
         :parameter max_iters: Specify the maximal iterations. -1 for no limit.
         :parameter eps: Specify a non-zero value to prevent ZeroDivisionError.
         :parameter abs_tol: Specify the absolute tolerance of loss.
         :parameter rel_tol: Specify the tolerance of loss relative to initial loss.
-        '''
-        all_neumann = (self.boundary_types.sum() == 2 * 2 * self.dim)
+        """
+        all_neumann = self.boundary_types.sum() == 2 * 2 * self.dim
 
         # self.r = b - Ax = b    since self.x = 0
         # self.p = self.r = self.r + 0 self.p
@@ -227,7 +219,7 @@ Grid-based MGPCG solver for the possion equation.
 
         self.reduce(self.z[0], self.r[0])
         old_zTr = self.sum[None]
-        #print("[MGPCG] Starting error: ", math.sqrt(old_zTr))
+        # print("[MGPCG] Starting error: ", math.sqrt(old_zTr))
 
         # Conjugate gradients
         it = 0
@@ -250,7 +242,7 @@ Grid-based MGPCG solver for the possion equation.
             rTr = self.sum[None]
 
             if verbose:
-                print(f'iter {it}, |residual|_2={math.sqrt(rTr)}')
+                print(f"iter {it}, |residual|_2={math.sqrt(rTr)}")
 
             if rTr < tol:
                 end_t = time.time()
@@ -325,7 +317,7 @@ class MGPCG_2(MGPCG):
                 pl = 0
             if i >= u_dim:
                 pr = 0
-            u_horizontal[i, j] -= (pr - pl)
+            u_horizontal[i, j] -= pr - pl
         for i, j in u_vertical:
             pt = sample(self.p, i, j)
             pb = sample(self.p, i, j - 1)
@@ -337,7 +329,7 @@ class MGPCG_2(MGPCG):
 
     def solve_pressure_MGPCG(self, verbose):
         self.init(self.u_div, -1)
-        self.solve(max_iters=400, verbose=verbose, tol=1.e-12)
+        self.solve(max_iters=400, verbose=verbose, tol=1.0e-12)
         self.get_result(self.p)
 
     def Poisson(self, u_horizontal, u_vertical, verbose=False):
@@ -407,7 +399,7 @@ class MGPCG_3(MGPCG):
                 pl = 0
             if i >= u_dim:
                 pr = 0
-            u_x[i, j, k] -= (pr - pl)
+            u_x[i, j, k] -= pr - pl
         for i, j, k in u_y:
             pt = sample(self.p, i, j, k)
             pb = sample(self.p, i, j - 1, k)
@@ -427,7 +419,7 @@ class MGPCG_3(MGPCG):
 
     def solve_pressure_MGPCG(self, verbose):
         self.init(self.u_div, -1)
-        self.solve(max_iters=400, verbose=verbose, tol=1.e-12)
+        self.solve(max_iters=400, verbose=verbose, tol=1.0e-12)
         self.get_result(self.p)
 
     @ti.kernel

@@ -2,15 +2,18 @@ import json
 import os
 
 import imageio
+import lovely_tensors as lt
 import numpy as np
 import taichi as ti
 import torch
 import torch.nn.functional as F
 
+from rich import pretty
 from torch.func import jacrev, vmap
 from tqdm import tqdm, trange
 
 from load_scalarflow import load_pinf_frame_data
+from parser_helper import config_parser_joint as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
@@ -20,6 +23,7 @@ from run_nerf_helpers import (
     get_rays_np,
     get_rays_np_continuous,
     img2mse,
+    mean_squared_error,
     mse2psnr,
     sample_bilinear,
     save_quiver_plot,
@@ -55,11 +59,11 @@ def batchify_rays(rays_flat, chunk=1024 * 64, **kwargs):
     return all_ret
 
 
-def batchify_get_ray_pts_velocity_and_derivitive(pts, chunk=1024 * 64, **kwargs):
+def batchify_get_ray_pts_velocity_and_derivative(pts, chunk=1024 * 64, **kwargs):
     """Render rays in smaller minibatches to avoid OOM."""
     all_ret = {}
     for i in range(0, pts.shape[0], chunk):
-        ret = get_ray_pts_velocity_and_derivitives(pts[i : i + chunk], **kwargs)
+        ret = get_ray_pts_velocity_and_derivatives(pts[i : i + chunk], **kwargs)
         for k in ret:
             if k not in all_ret:
                 all_ret[k] = []
@@ -165,7 +169,7 @@ def render(H, W, K, rays=None, c2w=None, near=0.0, far=1.0, time_step=None, **kw
     return ret_list + ret_dict
 
 
-def get_velocity_and_derivitives(pts, **kwargs):
+def get_velocity_and_derivatives(pts, **kwargs):
     """Render rays
     Args:
       H: int. Height of image in pixels.
@@ -184,7 +188,7 @@ def get_velocity_and_derivitives(pts, **kwargs):
     """
 
     # Render and reshape
-    all_ret = batchify_get_ray_pts_velocity_and_derivitive(pts, **kwargs)
+    all_ret = batchify_get_ray_pts_velocity_and_derivative(pts, **kwargs)
 
     k_extract = ["raw_vel", "raw_f"] if kwargs["no_vel_der"] else ["raw_vel", "raw_f", "_u_x", "_u_y", "_u_z", "_u_t"]
     ret_list = [all_ret[k] for k in k_extract]
@@ -192,7 +196,15 @@ def get_velocity_and_derivitives(pts, **kwargs):
 
 
 def render_path(
-    render_poses, hwf, K, gt_imgs=None, savedir=None, time_steps=None, vel_scale=0.01, sim_step=5, **render_kwargs
+    render_poses,
+    hwf,
+    K,
+    gt_imgs=None,
+    savedir=None,
+    time_steps=None,
+    vel_scale=0.01,
+    sim_step=5,
+    **render_kwargs,
 ):
 
     H, W, focal = hwf
@@ -262,13 +274,21 @@ def create_nerf(args):
     min_res = np.array([args.base_resolution, args.base_resolution, args.base_resolution, args.base_resolution_t])
 
     embed_fn = Hash4Encoder(
-        max_res=max_res, min_res=min_res, num_scales=args.num_levels, max_params=2**args.log2_hashmap_size
+        max_res=max_res,
+        min_res=min_res,
+        num_scales=args.num_levels,
+        max_params=2**args.log2_hashmap_size,
     )
     input_ch = embed_fn.num_scales * 2  # default 2 params per scale
     embedding_params = list(embed_fn.parameters())
 
     model = NeRFSmall(
-        num_layers=2, hidden_dim=64, geo_feat_dim=15, num_layers_color=2, hidden_dim_color=16, input_ch=input_ch
+        num_layers=2,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=input_ch,
     ).to(device)
     print(model)
     print(
@@ -677,7 +697,7 @@ def _get_minibatch_jacobian(y, x):
     return jac
 
 
-def get_ray_pts_velocity_and_derivitives(pts, network_vel_fn, N_samples, **kwargs):
+def get_ray_pts_velocity_and_derivatives(pts, network_vel_fn, N_samples, **kwargs):
     """Volumetric rendering.
     Args:
       ray_batch: array of shape [batch_size, ...]. All information necessary
@@ -728,105 +748,6 @@ def get_ray_pts_velocity_and_derivitives(pts, network_vel_fn, N_samples, **kwarg
         ret["_u_t"] = _u_t
 
     return ret
-
-
-def config_parser():
-    import configargparse
-
-    parser = configargparse.ArgumentParser()
-    parser.add_argument("--config", is_config_file=True, help="config file path")
-    parser.add_argument("--expname", type=str, help="experiment name")
-    parser.add_argument("--basedir", type=str, default="./logs/", help="where to store ckpts and logs")
-    parser.add_argument("--datadir", type=str, default="./data/llff/fern", help="input data directory")
-
-    # training options
-    parser.add_argument(
-        "--N_rand", type=int, default=32 * 32 * 4, help="batch size (number of random rays per gradient step)"
-    )
-    parser.add_argument("--N_time", type=int, default=1, help="batch size in time")
-    parser.add_argument("--lrate", type=float, default=5e-4, help="learning rate")
-    parser.add_argument("--lrate_den", type=float, default=5e-4, help="learning rate")
-    parser.add_argument("--lrate_decay", type=int, default=250, help="exponential learning rate decay")
-    parser.add_argument("--N_iters", type=int, default=5000)
-    parser.add_argument("--no_reload", action="store_true", help="do not reload weights from saved ckpt")
-    parser.add_argument(
-        "--ft_path", type=str, default=None, help="specific weights npy file to reload for coarse network"
-    )
-    parser.add_argument(
-        "--ft_v_path", type=str, default=None, help="specific weights npy file to reload for coarse network"
-    )
-    parser.add_argument("--use_f", action="store_true", default=False, help="predict f")
-    parser.add_argument(
-        "--detach_vel",
-        action="store_true",
-        default=False,
-    )
-
-    # rendering options
-    parser.add_argument("--N_samples", type=int, default=64, help="number of coarse samples per ray")
-    parser.add_argument("--perturb", type=float, default=1.0, help="set to 0. for no jitter, 1. for jitter")
-
-    parser.add_argument(
-        "--render_only", action="store_true", help="do not optimize, reload weights and render out render_poses path"
-    )
-    parser.add_argument("--train_vel", action="store_true", help="train velocity network")
-    parser.add_argument("--run_advect_den", action="store_true", help="Run advect")
-    parser.add_argument("--run_future_pred", action="store_true", help="Run future")
-    parser.add_argument("--generate_vort_particles", action="store_true", help="shortcut to generate vort particles")
-    parser.add_argument("--half_res", action="store_true", help="load at half resolution")
-    parser.add_argument("--sim_res_x", type=int, default=128, help="simulation resolution along X/width axis")
-    parser.add_argument("--sim_res_y", type=int, default=192, help="simulation resolution along Y/height axis")
-    parser.add_argument("--sim_res_z", type=int, default=128, help="simulation resolution along Z/depth axis")
-    parser.add_argument(
-        "--proj_y", type=int, default=128, help="projection resolution along Y/height axis, this must be 2**n"
-    )
-    parser.add_argument(
-        "--y_start", type=int, default=48, help="Within sim_res_y, where to start the projection domain"
-    )
-    parser.add_argument("--use_project", action="store_true", help="use projection in re-simulation?")
-
-    # logging/saving options
-    parser.add_argument("--i_print", type=int, default=100, help="frequency of console printout and metric loggin")
-    parser.add_argument("--i_weights", type=int, default=10000, help="frequency of weight ckpt saving")
-    parser.add_argument("--i_video", type=int, default=9999999, help="frequency of render_poses video saving")
-
-    parser.add_argument("--finest_resolution", type=int, default=512, help="finest resolution for hashed embedding")
-    parser.add_argument("--finest_resolution_t", type=int, default=256, help="finest resolution for hashed embedding")
-    parser.add_argument("--num_levels", type=int, default=16, help="number of levels for hashed embedding")
-    parser.add_argument("--base_resolution", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--base_resolution_t", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--finest_resolution_v", type=int, default=512, help="finest resolution for hashed embedding")
-    parser.add_argument(
-        "--finest_resolution_v_t", type=int, default=256, help="finest resolution for hashed embedding"
-    )
-    parser.add_argument("--base_resolution_v", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--base_resolution_v_t", type=int, default=16, help="base resolution for hashed embedding")
-    parser.add_argument("--log2_hashmap_size", type=int, default=19, help="log2 of hashmap size")
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6, help="learning rate")
-    parser.add_argument("--no_vel_der", action="store_true", help="do not use velocity derivatives-related losses")
-    parser.add_argument(
-        "--save_fields", action="store_true", help="when run_advect_density, save fields for paraview rendering"
-    )
-    parser.add_argument("--save_den", action="store_true", help="for houdini rendering")
-    parser.add_argument("--vel_num_layers", type=int, default=2, help="number of layers in velocity network")
-    parser.add_argument("--vel_scale", type=float, default=0.01)
-    parser.add_argument("--vel_weight", type=float, default=0.1)
-    parser.add_argument("--d_weight", type=float, default=0.1)
-    parser.add_argument("--flow_weight", type=float, default=0.001)
-    parser.add_argument("--rec_weight", type=float, default=0)
-    parser.add_argument("--sim_steps", type=int, default=1)
-    parser.add_argument("--proj_weight", type=float, default=0.0)
-    parser.add_argument("--d2v_weight", type=float, default=0.0)
-    parser.add_argument("--coef_den2vel", type=float, default=0.0)
-    parser.add_argument("--debug", action="store_true", default=False)
-
-    return parser
-
-
-def mean_squared_error(pred, exact):
-    if type(pred) is np.ndarray:
-        return np.mean(np.square(pred - exact))
-    return torch.mean(torch.square(pred - exact))
 
 
 def train():
@@ -924,7 +845,7 @@ def train():
             test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
             render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-            get_vel_der_fn = lambda pts: get_velocity_and_derivitives(pts, no_vel_der=False, **render_kwargs_test_vel)
+            get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
 
             if args.generate_vort_particles:
                 vort_particles = generate_vort_trajectory_curl(
@@ -990,7 +911,7 @@ def train():
             test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
             render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-            get_vel_der_fn = lambda pts: get_velocity_and_derivitives(pts, no_vel_der=False, **render_kwargs_test_vel)
+            get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
 
             run_future_pred(
                 test_view_poses,
@@ -1114,10 +1035,10 @@ def train():
 
         pts = extras["pts"]
         if args.no_vel_der:
-            raw_vel, raw_f = get_velocity_and_derivitives(pts, no_vel_der=True, **render_kwargs_train_vel)
+            raw_vel, raw_f = get_velocity_and_derivatives(pts, no_vel_der=True, **render_kwargs_train_vel)
             _u_x, _u_y, _u_z, _u_t = None, None, None, None
         else:
-            raw_vel, raw_f, _u_x, _u_y, _u_z, _u_t = get_velocity_and_derivitives(
+            raw_vel, raw_f, _u_x, _u_y, _u_z, _u_t = get_velocity_and_derivatives(
                 pts, no_vel_der=False, **render_kwargs_train_vel
             )
         _d_t = extras["_d_t"]
@@ -1131,7 +1052,7 @@ def train():
             print(f"skip large loss {torch.stack(nse_errors).sum():.3g}, timestep={pts[0,3]}")
             continue
 
-        nseloss_fine = 0.0
+        nse_loss_fine = 0.0
         split_nse_wei = (
             [args.flow_weight, args.vel_weight, args.vel_weight, args.vel_weight, args.d_weight]
             if not args.no_vel_der
@@ -1154,7 +1075,7 @@ def train():
             d_loss_meter.update((nse_errors[4]).item())
 
         for ei, wi in zip(nse_errors, split_nse_wei):
-            nseloss_fine = ei * wi + nseloss_fine
+            nse_loss_fine = ei * wi + nse_loss_fine
 
         if args.proj_weight > 0:
             # initialize density field
@@ -1177,6 +1098,7 @@ def train():
             proj_loss = torch.zeros_like(img_loss)
 
         if args.d2v_weight > 0:
+            # regularization on too small and too large value
             raw_d = extras["raw_d"]
             viz_dens_mask = raw_d.detach() > 0.1
             vel_norm = raw_vel.norm(dim=-1, keepdim=True)
@@ -1192,7 +1114,7 @@ def train():
         den2vel_loss_meter.update(min_vel_reg.item())
 
         vel_loss = (
-            nseloss_fine + args.rec_weight * img_loss + args.proj_weight * proj_loss + args.d2v_weight * min_vel_reg
+            nse_loss_fine + args.rec_weight * img_loss + args.proj_weight * proj_loss + args.d2v_weight * min_vel_reg
         )
         vel_loss_meter.update(vel_loss.item())
         vel_loss.backward()
@@ -1205,18 +1127,18 @@ def train():
             print("vel", grad_vel)
             if grad_vel is not None:
                 print("vel", grad_vel.max(), grad_vel.min(), grad_vel.shape)
-            grad_hashtable = render_kwargs_train_vel["embed_fn"].hash_table.grad
-            print("hashtable", grad_hashtable)
-            if grad_hashtable is not None:
-                print("hashtable", grad_hashtable.max(), grad_hashtable.min(), grad_hashtable.shape)
+            grad_hash_table = render_kwargs_train_vel["embed_fn"].hash_table.grad
+            print("hash_table", grad_hash_table)
+            if grad_hash_table is not None:
+                print("hash_table", grad_hash_table.max(), grad_hash_table.min(), grad_hash_table.shape)
             grad_density = render_kwargs_train["network_fn"].sigma_net[0].weight.grad
             print("density", grad_density)
             if grad_density is not None:
                 print("density", grad_density.max(), grad_density.min(), grad_density.shape)
-            grad_hashtable = render_kwargs_train["embed_fn"].hash_table.grad
-            print("hashtable", grad_hashtable)
-            if grad_hashtable is not None:
-                print("hashtable", grad_hashtable.max(), grad_hashtable.min(), grad_hashtable.shape)
+            grad_hash_table = render_kwargs_train["embed_fn"].hash_table.grad
+            print("hash_table", grad_hash_table)
+            if grad_hash_table is not None:
+                print("hash_table", grad_hash_table.max(), grad_hash_table.min(), grad_hash_table.shape)
 
         optimizer_vel.step()
         optimizer.step()
@@ -1341,7 +1263,8 @@ def train():
 
 
 if __name__ == "__main__":
+    lt.monkey_patch()
+    pretty.install()
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
-    import ipdb
 
     train()
