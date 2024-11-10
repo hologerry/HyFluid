@@ -3,9 +3,9 @@ python run_nerf_density.py \
     --lrate 0.01 \
     --lrate_decay 100000 \
     --N_iters 300000 \
-    --i_weights 100000 \
+    --i_weights 10000 \
     --N_time 1 \
-    --expname exp_real/density_256_128 \
+    --expname exp_scalar_view2_real_debug/density_256_128 \
     --i_video 100000 \
     --finest_resolution 256 \
     --base_resolution 16 \
@@ -15,4 +15,3 @@ python run_nerf_density.py \
     --N_samples 192 \
     --N_rand 256 \
     --log2_hashmap_size 19 \
-

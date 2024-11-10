@@ -49,7 +49,7 @@ def load_pinf_frame_data(basedir, half_res=False, split="train"):
     all_imgs = []
     all_poses = []
 
-    with open(os.path.join(basedir, "info.json"), "r") as fp:
+    with open(os.path.join(basedir, "info_view2.json"), "r") as fp:
         # read render settings
         meta = json.load(fp)
         near = float(meta["near"])

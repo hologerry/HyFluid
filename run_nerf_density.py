@@ -6,6 +6,7 @@ import lovely_tensors as lt
 import lpips
 import matplotlib.pyplot as plt
 import numpy as np
+import taichi as ti
 import torch
 import torch.nn.functional as F
 
@@ -13,7 +14,7 @@ from skimage.metrics import structural_similarity
 from tqdm import tqdm, trange
 
 from load_scalarflow import load_pinf_frame_data
-from parser_helper import config_parser_dense as config_parser
+from parser_helper import config_parser_density as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
@@ -186,6 +187,7 @@ def create_nerf(args):
             num_scales=args.num_levels,
             max_params=2**args.log2_hashmap_size,
         )
+        embed_fn = embed_fn.to(device)
         input_ch = embed_fn.num_scales * 2  # default 2 params per scale
         embedding_params = list(embed_fn.parameters())
     else:
@@ -275,7 +277,7 @@ def raw2outputs(raw, z_vals, rays_d, learned_rgb=None):
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1.0 - torch.exp(-act_fn(raw) * dists)
 
     dists = z_vals[..., 1:] - z_vals[..., :-1]
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+    dists = torch.cat([dists, torch.Tensor([1e10]).cuda().expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
 
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
 
@@ -342,9 +344,9 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
     pts = torch.cat([pts, pts_time_step], -1)  # [..., 4]
     pts_flat = torch.reshape(pts, [-1, 4])
     out_dim = 1
-    raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
+    raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim).cuda()
 
-    np.savetxt("pts_flat.txt", pts_flat.cpu().numpy())
+    np.savetxt("logs/pts_flat.txt", pts_flat.cpu().numpy())
 
     bbox_mask = bbox_model.insideMask(pts_flat[..., :3], to_float=False)
 
@@ -352,7 +354,7 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
         bbox_mask[0] = True  # in case zero rays are inside the bbox
     pts = pts_flat[bbox_mask]
 
-    np.savetxt("pts.txt", pts.cpu().numpy())
+    np.savetxt("logs/pts.txt", pts.cpu().numpy())
 
     raw_flat[bbox_mask] = network_query_fn(pts)
     raw = raw_flat.reshape(N_rays, N_samples, out_dim)
@@ -383,7 +385,7 @@ def train():
     global bbox_model
     voxel_tran_inv = np.linalg.inv(voxel_tran)
     bbox_model = BBoxTool(voxel_tran_inv, voxel_scale)
-    render_timesteps = torch.tensor(render_timesteps, dtype=torch.float32)
+    render_timesteps = torch.tensor(render_timesteps, dtype=torch.float32).cuda()
     print("Loaded scalarflow", images_train_.shape, render_poses.shape, hwf, args.datadir)
 
     # Cast intrinsics to right types
@@ -609,15 +611,17 @@ def train():
 
 
 if __name__ == "__main__":
-    import taichi as ti
 
     lt.monkey_patch()
-    ti.init(arch=ti.cuda, device_memory_GB=6.0)
-    torch.set_default_tensor_type("torch.cuda.FloatTensor")
-    import ipdb
 
-    try:
-        train()
-    except Exception as e:
-        print(e)
-        ipdb.post_mortem()
+    ti.init(arch=ti.cuda, device_memory_GB=32.0, cpu_max_num_threads=96)
+    torch.set_default_dtype(torch.float32)
+    torch.set_default_device("cuda")
+    train()
+    # import ipdb
+
+    # try:
+    #     train()
+    # except Exception as e:
+    #     print(e)
+    #     ipdb.post_mortem()

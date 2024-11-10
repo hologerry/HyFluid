@@ -1,6 +1,6 @@
 expname = scalarflowreal
 basedir = ./logs
-datadir = /data/Dynamics/ScalarReal
+datadir = data/ScalarReal
 
 N_samples = 192
 N_rand = 1024
