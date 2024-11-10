@@ -1,4 +1,4 @@
-name: hyfluid_
+name: hyfluid
 channels:
   - conda-forge
   - defaults
