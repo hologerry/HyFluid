@@ -1,6 +1,6 @@
 expname = realcapture_red
 basedir = ./logs
-datadir = /data/Dynamics/RealCaptureBlackBlueCloudRedBallAnotherData
+datadir = /data/Dynamics/RealCaptureBlackBlueCloudOneData
 
 N_samples = 192
 N_rand = 1024
