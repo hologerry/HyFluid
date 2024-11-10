@@ -14,6 +14,7 @@ from skimage.metrics import structural_similarity
 from tqdm import tqdm, trange
 
 from load_scalarflow import load_pinf_frame_data
+from load_realcapture import load_real_capture_frame_data
 from parser_helper import config_parser_density as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
@@ -346,7 +347,7 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
     out_dim = 1
     raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim).cuda()
 
-    np.savetxt("logs/pts_flat.txt", pts_flat.cpu().numpy())
+    # np.savetxt("logs/pts_flat.txt", pts_flat.cpu().numpy())
 
     bbox_mask = bbox_model.insideMask(pts_flat[..., :3], to_float=False)
 
@@ -354,7 +355,7 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
         bbox_mask[0] = True  # in case zero rays are inside the bbox
     pts = pts_flat[bbox_mask]
 
-    np.savetxt("logs/pts.txt", pts.cpu().numpy())
+    # np.savetxt("logs/pts.txt", pts.cpu().numpy())
 
     raw_flat[bbox_mask] = network_query_fn(pts)
     raw = raw_flat.reshape(N_rays, N_samples, out_dim)
@@ -375,13 +376,22 @@ def train():
     parser = config_parser()
     args = parser.parse_args()
 
-    # Load data
-    images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-        load_pinf_frame_data(args.datadir, args.half_res, split="train")
-    )
-    images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-        load_pinf_frame_data(args.datadir, args.half_res, split="test")
-    )
+    if "scalar" in args.datadir.lower():
+        # Load data
+        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_pinf_frame_data(args.datadir, args.half_res, split="train")
+        )
+        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_pinf_frame_data(args.datadir, args.half_res, split="test")
+        )
+    else:
+        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_real_capture_frame_data(args.datadir, args.half_res, split="train")
+        )
+        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_real_capture_frame_data(args.datadir, args.half_res, split="test")
+        )
+
     global bbox_model
     voxel_tran_inv = np.linalg.inv(voxel_tran)
     bbox_model = BBoxTool(voxel_tran_inv, voxel_scale)

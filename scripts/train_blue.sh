@@ -1,11 +1,11 @@
 python run_nerf_density.py \
-    --config configs/scalarflowreal.txt \
+    --config configs/realcapture_blue.txt \
     --lrate 0.01 \
     --lrate_decay 100000 \
     --N_iters 300000 \
     --i_weights 10000 \
     --N_time 1 \
-    --expname exp_density_256_128_view2_scalar \
+    --expname exp_density_256_128_view2_blue \
     --i_video 100000 \
     --finest_resolution 256 \
     --base_resolution 16 \

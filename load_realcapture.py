@@ -44,71 +44,86 @@ def pose_spherical(theta, phi, radius, rotZ=True, wx=0.0, wy=0.0, wz=0.0):
     return c2w
 
 
-def load_pinf_frame_data(basedir, half_res=False, split="train"):
+def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     # frame data
     all_imgs = []
     all_poses = []
 
-    with open(os.path.join(basedir, "info_view2.json"), "r") as fp:
+    with open(os.path.join(basedir, "transforms_aligned.json"), "r") as fp:
         # read render settings
         meta = json.load(fp)
     near = float(meta["near"])
     far = float(meta["far"])
     radius = (near + far) * 0.5
-    phi = float(meta["phi"])
-    rotZ = meta["rot"] == "Z"
-    r_center = np.float32(meta["render_center"])
+    phi = 20.0
+    rotZ = False
+    r_center = np.array([0.3382070094283088, 0.38795384153014023, -0.2609209839653898]).astype(np.float32)
 
     # read scene data
-    voxel_tran = np.float32(meta["voxel_matrix"])
+    voxel_tran = np.array(
+        [
+            [0.0, 0.0, 1.0, 0.081816665828228],
+            [0.0, 1.0, 0.0, -0.044627271592617035],
+            [-1.0, 0.0, 0.0, -0.004908999893814325],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
     # swap_zx
     voxel_tran = np.stack([voxel_tran[:, 2], voxel_tran[:, 1], voxel_tran[:, 0], voxel_tran[:, 3]], axis=1)
-    voxel_scale = np.broadcast_to(meta["voxel_scale"], [3])
+    voxel_scale = np.broadcast_to([0.4909, 0.73635, 0.4909], [3])
 
     # read video frames
     # all videos should be synchronized, having the same frame_rate and frame_num
 
-    video_list = meta[split + "_videos"] if (split + "_videos") in meta else meta["train_videos"][0:1]
+    frames = meta["frames"]
+    if split == "train":
+        target_cam_names = ["0", "1", "3", "4"]
+    else:
+        target_cam_names = ["2"]
 
-    for video_id, train_video in enumerate(video_list):
-        imgs = []
-        H, W = 0, 0
-        f_name = os.path.join(basedir, train_video["file_name"])
-        reader = imageio.get_reader(f_name, "ffmpeg")
-        for frame_i in range(train_video["frame_num"]):
-            reader.set_image_index(frame_i)
-            frame = reader.get_next_data()
+    frame_nums = 120
+    if "red" in basedir.lower():
+        print("red")
+        start_i = 33
+    elif "blue" in basedir.lower():
+        print("blue")
+        start_i = 55
+    else:
+        raise ValueError("Unknown dataset")
 
-            if H == 0:
-                H, W = frame.shape[:2]
+    for frame_dict in frames:
+        cam_name = frame_dict["file_path"][-1:]  # train0x -> x used to determine with train_views
+        if cam_name not in target_cam_names:
+            continue
 
-            imgs.append(frame)
+        camera_angle_x = float(frame_dict["camera_angle_x"])
+        camera_hw = frame_dict["camera_hw"]
+        H, W = camera_hw
 
-        camera_angle_x = float(train_video["camera_angle_x"])
         Focal = 0.5 * W / np.tan(0.5 * camera_angle_x)
-
-        # print(f"video {train_video['file_name']} focal {Focal}")
-        reader.close()
-        imgs = np.float32(imgs) / 255.0
-
         if half_res:
             H = H // 2
             W = W // 2
             Focal = Focal / 2.0
 
-            imgs_half_res = np.zeros((imgs.shape[0], H, W, imgs.shape[-1]))
-            for i, img in enumerate(imgs):
-                imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
-            imgs = imgs_half_res
+        imgs = []
+
+        for time_idx in range(start_i, start_i + frame_nums * 2, 2):
+
+            frame_path = os.path.join(frame_dict["file_path"], f"{time_idx:03d}.png")
+            frame = cv2.imread(os.path.join(basedir, frame_path))
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            if half_res:
+                frame = cv2.resize(frame, (W, H), interpolation=cv2.INTER_AREA)
+
+            imgs.append(frame)
+
+        # print(f"video {train_video['file_name']} focal {Focal}")
+        imgs = np.float32(imgs) / 255.0
 
         all_imgs.append(imgs)
-        all_poses.append(
-            np.array(
-                train_video["transform_matrix_list"][frame_i]
-                if "transform_matrix_list" in train_video
-                else train_video["transform_matrix"]
-            ).astype(np.float32)
-        )
+        all_poses.append(np.array(frame_dict["transform_matrix"]).astype(np.float32))
 
     imgs = np.stack(all_imgs, 0)  # [V, T, H, W, 3]
     imgs = np.transpose(imgs, [1, 0, 2, 3, 4])  # [T, V, H, W, 3]
