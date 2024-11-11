@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 
 import imageio
 import lovely_tensors as lt
@@ -8,17 +9,15 @@ import taichi as ti
 import torch
 import torch.nn.functional as F
 
-from rich import pretty
 from torch.func import jacrev, vmap
 from tqdm import tqdm, trange
 
 from load_realcapture import load_real_capture_frame_data
 from load_scalarflow import load_pinf_frame_data
-from parser_helper import config_parser_joint as config_parser
+from parser_helper import config_parser_vort as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
-    NeRFSmall_bg,
     NeRFSmallPotential,
     batchify_query,
     get_rays,
@@ -35,10 +34,13 @@ from taichi_encoders.mgpcg import MGPCG_3
 from utils import (
     AverageMeter,
     BBoxTool,
+    Vortex_Particles,
     generate_vort_trajectory_curl,
     merge_imgs,
     run_advect_den,
     run_future_pred,
+    run_view_synthesis,
+    write_ply,
 )
 
 
@@ -75,14 +77,13 @@ def batchify_get_ray_pts_velocity_and_derivative(pts, chunk=1024 * 64, **kwargs)
     return all_ret
 
 
-def PDE_EQs(D_t, D_x, D_y, D_z, U, F, U_t=None, U_x=None, U_y=None, U_z=None, detach=False):
+def PDE_EQs(D_t, D_x, D_y, D_z, U, F, U_t=None, U_x=None, U_y=None, U_z=None):
     eqs = []
     dts = [D_t]
     dxs = [D_x]
     dys = [D_y]
     dzs = [D_z]
 
-    # why set all values to zero?
     F = torch.cat([torch.zeros_like(F[:, :1]), F], dim=1) * 0  # (N,4)
     u, v, w = U.split(1, dim=-1)  # (N,1)
     F_t, F_x, F_y, F_z = F.split(1, dim=-1)  # (N,1)
@@ -96,14 +97,8 @@ def PDE_EQs(D_t, D_x, D_y, D_z, U, F, U_t=None, U_x=None, U_y=None, U_z=None, de
     else:
         dfs = [F_t]
 
-    for i, (dt, dx, dy, dz, df) in enumerate(zip(dts, dxs, dys, dzs, dfs)):
-        if i == 0:
-            _e = dt + (u * dx + v * dy + w * dz) + df
-        else:
-            if detach:
-                _e = dt + (u.detach() * dx + v.detach() * dy + w.detach() * dz) + df
-            else:
-                _e = dt + (u * dx + v * dy + w * dz) + df
+    for dt, dx, dy, dz, df in zip(dts, dxs, dys, dzs, dfs):
+        _e = dt + (u * dx + v * dy + w * dz) + df
         eqs += [_e]
 
     if None not in [U_t, U_x, U_y, U_z]:
@@ -164,6 +159,7 @@ def render(H, W, K, rays=None, c2w=None, near=0.0, far=1.0, time_step=None, **kw
             k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
             all_ret[k] = torch.reshape(all_ret[k], k_sh)
 
+    # k_extract = ['rgb_map', 'depth_map', 'acc_map']
     ret_list = [all_ret[k] for k in k_extract]
     ret_dict = [
         {k: all_ret[k] for k in all_ret if k not in k_extract},
@@ -198,15 +194,7 @@ def get_velocity_and_derivatives(pts, **kwargs):
 
 
 def render_path(
-    render_poses,
-    hwf,
-    K,
-    gt_imgs=None,
-    savedir=None,
-    time_steps=None,
-    vel_scale=0.01,
-    sim_step=5,
-    **render_kwargs,
+    render_poses, hwf, K, gt_imgs=None, savedir=None, time_steps=None, vel_scale=0.01, sim_step=5, **render_kwargs
 ):
 
     H, W, focal = hwf
@@ -245,7 +233,7 @@ def render_path(
             save_quiver_plot(
                 vel_map[..., 0],
                 vel_map[..., 1],
-                64,
+                128,
                 os.path.join(savedir, "vel_{:03d}.png".format(i)),
                 scale=vel_scale,
             )
@@ -276,32 +264,21 @@ def create_nerf(args):
     min_res = np.array([args.base_resolution, args.base_resolution, args.base_resolution, args.base_resolution_t])
 
     embed_fn = Hash4Encoder(
-        max_res=max_res,
-        min_res=min_res,
-        num_scales=args.num_levels,
-        max_params=2**args.log2_hashmap_size,
+        max_res=max_res, min_res=min_res, num_scales=args.num_levels, max_params=2**args.log2_hashmap_size
     )
     input_ch = embed_fn.num_scales * 2  # default 2 params per scale
     embedding_params = list(embed_fn.parameters())
 
-    if "scalar" in args.datadir.lower():
-        model = NeRFSmall(
-            num_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            num_layers_color=2,
-            hidden_dim_color=16,
-            input_ch=input_ch,
-        ).cuda()
-    else:
-        model = NeRFSmall_bg(
-            num_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            num_layers_color=2,
-            hidden_dim_color=16,
-            input_ch=input_ch,
-        ).cuda()
+    model = NeRFSmall(
+        num_layers=2,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=input_ch,
+        output_ch=4,
+    ).cuda()
+
     print(model)
     print(
         "Total number of trainable parameters in model: {}".format(
@@ -335,7 +312,9 @@ def create_nerf(args):
         ckpts = [args.ft_path]
     else:
         ckpts = [
-            os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if "tar" in f
+            os.path.join(basedir, expname, "den", f)
+            for f in sorted(os.listdir(os.path.join(basedir, expname, "den")))
+            if "tar" in f
         ]
 
     print("Found ckpts", ckpts)
@@ -343,6 +322,8 @@ def create_nerf(args):
         ckpt_path = ckpts[-1]
         print("Reloading from", ckpt_path)
         ckpt = torch.load(ckpt_path)
+
+        # start = ckpt['global_step']
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
 
         # Load model
@@ -369,6 +350,8 @@ def create_vel_nerf(args):
     """Instantiate NeRF's MLP model."""
     from taichi_encoders.hash4 import Hash4Encoder
 
+    # embed_fn, input_ch = get_encoder('hashgrid', input_dim=4, num_levels=args.num_levels, base_resolution=args.base_resolution,
+    #                                  finest_resolution=args.finest_resolution, log2_hashmap_size=args.log2_hashmap_size,)
     max_res = np.array(
         [args.finest_resolution_v, args.finest_resolution_v, args.finest_resolution_v, args.finest_resolution_v_t]
     )
@@ -377,7 +360,10 @@ def create_vel_nerf(args):
     )
 
     embed_fn = Hash4Encoder(
-        max_res=max_res, min_res=min_res, num_scales=args.num_levels, max_params=2**args.log2_hashmap_size
+        max_res=max_res,
+        min_res=min_res,
+        num_scales=args.num_levels,
+        max_params=2**args.log2_hashmap_size,
     )
     input_ch = embed_fn.num_scales * 2  # default 2 params per scale
     embedding_params = list(embed_fn.parameters())
@@ -389,7 +375,6 @@ def create_vel_nerf(args):
         num_layers_color=2,
         hidden_dim_color=16,
         input_ch=input_ch,
-        use_f=args.use_f,
     ).to(device)
     grad_vars = list(model.parameters())
     print(model)
@@ -429,8 +414,8 @@ def create_vel_nerf(args):
     ##########################
 
     # Load checkpoints
-    if args.ft_v_path is not None and args.ft_v_path != "None":
-        ckpts = [args.ft_v_path]
+    if args.vel_path is not None and args.vel_path != "None":
+        ckpts = [args.vel_path]
     else:
         ckpts = [
             os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if "tar" in f
@@ -442,14 +427,8 @@ def create_vel_nerf(args):
         print("Reloading from", ckpt_path)
         ckpt = torch.load(ckpt_path)
         print(ckpt["vel_network_fn_state_dict"].keys())
-        # update model
-        model_dict = model.state_dict()
-        pretrained_dict = ckpt["vel_network_fn_state_dict"]
-        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
-        print("Updated parameters:{}/{}".format(len(pretrained_dict), len(model_dict)))
-        # model.load_state_dict(ckpt['vel_network_fn_state_dict'])
+        # Load model
+        model.load_state_dict(ckpt["vel_network_fn_state_dict"])
         embed_fn.load_state_dict(ckpt["vel_embed_fn_state_dict"])
 
         optimizer.load_state_dict(ckpt["vel_optimizer_state_dict"])
@@ -497,11 +476,9 @@ def raw2outputs(raw, z_vals, rays_d, learned_rgb=None, render_vel=False):
         alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.0 - alpha + 1e-10], -1), -1)[:, :-1]
     )  # [N_rays, N_samples]
     if render_vel:
-        mask = raw[..., -1] > 0.1
-        N_samples = raw.shape[1]
-        rgb_map = raw[:, int(N_samples / 3.5), :3] * mask[:, int(N_samples / 3.5), None]
+        rgb_map = torch.sum(weights[..., None] * raw[..., :3], -2)  # [N_rays, 3]
     else:
-        rgb = torch.ones(3) * (0.6 + torch.tanh(learned_rgb) * 0.4)
+        rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
         rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1) / (torch.sum(weights, -1) + 1e-10)
@@ -523,8 +500,8 @@ def render_rays(
     render_vel=False,
     render_sim=False,
     render_grid=False,
+    render_den=False,
     den_grid=None,
-    color_grid=None,
     sim_step=0,
     dt=None,
     **kwargs,
@@ -576,12 +553,21 @@ def render_rays(
         bbox_mask[0] = True  # in case zero rays are inside the bbox
     pts = pts_flat[bbox_mask]
     ret = {}
-    if render_vel:
+    if render_den:
+        out_dim = 4
+        raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
+        raw_flat[bbox_mask] = network_query_fn(pts)
+        raw = raw_flat.reshape(N_rays, N_samples, out_dim)
+        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+            raw, z_vals, rays_d, learned_rgb=kwargs["network_fn"].rgb
+        )
+        ret = {"rgb_map": rgb_map, "depth_map": depth_map, "acc_map": acc_map}
+    elif render_vel:
         out_dim = 3
         raw_flat_vel = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_vel[bbox_mask] = network_query_fn_vel(pts)[0]  # raw_vel
         raw_vel = raw_flat_vel.reshape(N_rays, N_samples, out_dim)
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_den[bbox_mask] = network_query_fn(pts)  # raw_den
         raw_den = raw_flat_den.reshape(N_rays, N_samples, out_dim)
@@ -593,6 +579,7 @@ def render_rays(
         assert dt is not None and dt > 0, "dt must be specified a positive number for sim_onestep"
         for i in range(sim_step):
             if pts[0, 3] - dt < 0:
+                # print(f'step = {i}, now t < 0, skip simulating this timestep.')
                 break
 
             MacCormack = (
@@ -616,7 +603,7 @@ def render_rays(
                 pts = pts_maccorck
 
         # query density
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_den[bbox_mask] = network_query_fn(pts)  # raw_den
         raw_den = raw_flat_den.reshape(N_rays, N_samples, out_dim)
@@ -626,7 +613,7 @@ def render_rays(
         ret["rgb_map"] = rgb_map
     elif render_grid:  # render from a voxel grid
         assert den_grid is not None, "den_grid must be specified for render_grid."
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
 
         pts_world = pts[..., :3]
@@ -637,18 +624,8 @@ def render_rays(
 
         raw_flat_den[bbox_mask] = den_sampled.reshape(-1, 1)
         raw_den = raw_flat_den.reshape(N_rays, N_samples, out_dim)
-
-        if color_grid is not None:
-            raw_flat_rgb = torch.zeros([N_rays, N_samples, 3]).reshape(-1, 3)
-            color_grid = color_grid[None, ...].permute([0, 4, 3, 2, 1])  # [N, 1, Z, Y, X] i.e., [N, 3, D, H, W]
-            color_sampled = F.grid_sample(color_grid, pts_sample[None, ..., None, None, :], align_corners=True)
-            raw_flat_rgb[bbox_mask] = color_sampled.reshape(-1, 1)
-            raw_rgb = raw_flat_rgb.reshape(N_rays, N_samples, 3)
-        else:
-            raw_rgb = None
-
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
-            raw_den, z_vals, rays_d, learned_rgb=kwargs["network_fn"].rgb if color_grid is None else raw_rgb
+            raw_den, z_vals, rays_d, learned_rgb=kwargs["network_fn"].rgb
         )
         ret["rgb_map"] = rgb_map
     else:  # get density gradient for flow loss
@@ -666,24 +643,27 @@ def render_rays(
         jac = jac @ jac_x
 
         ret = {"raw_d": raw_d, "pts": pts}
+        # jac = _get_minibatch_jacobian(raw_d, pts)
         _d_x, _d_y, _d_z, _d_t = [torch.squeeze(_, -1) for _ in jac.split(1, dim=-1)]
         ret["_d_x"] = _d_x
         ret["_d_y"] = _d_y
         ret["_d_z"] = _d_z
         ret["_d_t"] = _d_t
-        out_dim = 1
+        out_dim = 4
         raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat[bbox_mask] = raw_d
+        # print(raw_flat[bbox_mask].max(), raw_flat[bbox_mask].min())
         raw = raw_flat.reshape(N_rays, N_samples, out_dim)
         rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
             raw, z_vals, rays_d, learned_rgb=kwargs["network_fn"].rgb
         )
         ret["rgb_map"] = rgb_map
-        ret["raw_d"] = raw_d
+        ret["disp_map"] = disp_map
+        ret["acc_map"] = acc_map
     return ret
 
 
-def _get_minibatch_jacobian(y, x):
+def _get_minibatch_jacobian(y, x, threshold=0.05):
     """Computes the Jacobian of y wrt x assuming minibatch-mode.
     Args:
       y: (N, ...) with a total of D_y elements in ...
@@ -703,9 +683,13 @@ def _get_minibatch_jacobian(y, x):
             retain_graph=True,
             create_graph=True,
         )[0].view(x.shape[0], -1)
+        # mask = torch.abs(y[:, j]) > threshold
+        # print(mask.shape, dy_j_dx.shape, mask.sum())
+        # dy_j_dx = dy_j_dx * mask[:, None].float()
 
         jac.append(torch.unsqueeze(dy_j_dx, 1))
     jac = torch.cat(jac, 1)
+    # mask = torch.abs(y) > threshold
     return jac
 
 
@@ -729,7 +713,8 @@ def get_ray_pts_velocity_and_derivatives(pts, network_vel_fn, N_samples, **kwarg
         sample.
     """
     if kwargs["no_vel_der"]:
-        vel_output, f_output = network_vel_fn(pts)
+        with torch.no_grad():
+            vel_output, f_output = network_vel_fn(pts)
         ret = {}
         ret["raw_vel"] = vel_output
         ret["raw_f"] = f_output
@@ -740,6 +725,7 @@ def get_ray_pts_velocity_and_derivatives(pts, network_vel_fn, N_samples, **kwarg
 
     model = kwargs["network_fn"]
     embed_fn = kwargs["embed_fn"]
+    # vel_output, f_output, h = network_vel_fn(pts)
     h = embed_fn(pts)
     vel_output, f_output = model(h)
     ret = {}
@@ -753,6 +739,7 @@ def get_ray_pts_velocity_and_derivatives(pts, network_vel_fn, N_samples, **kwarg
         assert jac.shape == (pts.shape[0], 3, 4)
         _u_x, _u_y, _u_z, _u_t = [torch.squeeze(_, -1) for _ in jac.split(1, dim=-1)]  # (N,1)
         d = _u_x[:, 0] + _u_y[:, 1] + _u_z[:, 2]
+        # _u_x, _u_y, _u_z, _u_t, d = get_vel_derivatives(pts, model, embed_fn)
         ret["raw_vel"] = vel_output
         ret["_u_x"] = _u_x
         ret["_u_y"] = _u_y
@@ -830,27 +817,76 @@ def train():
     # Move testing data to GPU
     render_poses = torch.Tensor(render_poses).to(device)
 
+    N_timesteps = images_test.shape[0]
+    test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
+    render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
+    render_kwargs_test.update(save_fields=args.save_fields)
+    get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
+
+    if args.run_without_vort:
+        vort_particles = None
+    else:
+        vort_particles = Vortex_Particles(args.n_particles, images_train_.shape[0], R=args.vort_radius)
+        os.makedirs(os.path.join(basedir, expname, "vort"), exist_ok=True)
+        ckpts = [
+            os.path.join(basedir, expname, "vort", f)
+            for f in sorted(os.listdir(os.path.join(basedir, expname, "vort")))
+            if "tar" in f
+        ]
+        if len(ckpts) > 0:
+            ckpt_path = ckpts[-1]
+            print("Reloading from", ckpt_path)
+            ckpt = torch.load(ckpt_path)
+            vort_particles.initialize_with_state_dict(ckpt)
+        else:
+            print("Initializing vortex particle trajectory.")
+            with torch.no_grad():
+                vort_particles_dict = generate_vort_trajectory_curl(
+                    time_steps=test_timesteps,
+                    P=args.n_particles,
+                    bbox_model=bbox_model,
+                    rx=rx,
+                    ry=ry,
+                    rz=rz,
+                    get_vel_der_fn=get_vel_der_fn,
+                    den_net=render_kwargs_test["network_query_fn"],
+                    **render_kwargs_test,
+                )
+            vort_particles.initialize_from_generation(vort_particles_dict)
+            particle_pos_sim = bbox_model.world2sim(vort_particles.particle_pos_world)
+            write_ply(
+                particle_pos_sim.flatten(0, 1).cpu().numpy(), os.path.join(basedir, expname, "vort", "vort_traj.ply")
+            )
+        optimizer_vort = torch.optim.RAdam(vort_particles.parameters(), lr=args.lrate, betas=(0.0, 0.9))
+
     # Short circuit if only rendering out from trained model
-    if args.render_only:
-        print("RENDER ONLY")
+    if args.run_view_synthesis:
+        print("Run novel view synthesis.")
         with torch.no_grad():
-            testsavedir = os.path.join(basedir, expname, "render_only_{:06d}".format(start))
+            testsavedir = os.path.join(basedir, expname, "run_view_synthesis{:06d}".format(start))
+            shutil.rmtree(testsavedir, ignore_errors=True)
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
-            N_timesteps = images_test.shape[0]
-            test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-            print(test_view_poses.shape)
-            render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-            render_path(
+
+            run_view_synthesis(
                 test_view_poses,
                 hwf,
                 K,
                 time_steps=test_timesteps,
                 savedir=testsavedir,
-                vel_scale=args.vel_scale,
                 gt_imgs=images_test,
-                save_fields=args.save_fields,
+                bbox_model=bbox_model,
+                rx=rx,
+                ry=ry,
+                rz=rz,
+                y_start=y_start,
+                proj_y=proj_y,
+                use_project=use_project,
+                project_solver=project_solver,
+                render=render,
+                get_vel_der_fn=get_vel_der_fn,
+                vort_particles=vort_particles,
                 **render_kwargs_test,
             )
             return
@@ -861,24 +897,8 @@ def train():
             testsavedir = os.path.join(basedir, expname, "run_advect_den_{:06d}".format(start))
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
-            N_timesteps = images_test.shape[0]
-            test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-            render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-            get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
 
-            if args.generate_vort_particles:
-                vort_particles = generate_vort_trajectory_curl(
-                    time_steps=test_timesteps,
-                    bbox_model=bbox_model,
-                    rx=rx,
-                    ry=ry,
-                    rz=rz,
-                    get_vel_der_fn=get_vel_der_fn,
-                    **render_kwargs_test,
-                )
-            else:
-                vort_particles = None
             run_advect_den(
                 test_view_poses,
                 hwf,
@@ -895,28 +915,9 @@ def train():
                 use_project=use_project,
                 project_solver=project_solver,
                 render=render,
-                save_den=args.save_den,
                 get_vel_der_fn=get_vel_der_fn,
                 vort_particles=vort_particles,
-                save_fields=args.save_fields,
-                **render_kwargs_test,
-            )
-            run_advect_den(
-                test_view_poses,
-                hwf,
-                K,
-                time_steps=test_timesteps,
-                savedir=testsavedir,
-                gt_imgs=images_test,
-                bbox_model=bbox_model,
-                rx=rx,
-                ry=ry,
-                rz=rz,
-                y_start=y_start,
-                proj_y=proj_y,
-                use_project=use_project,
-                project_solver=project_solver,
-                render=render,
+                save_den=args.save_den,
                 **render_kwargs_test,
             )
             return
@@ -925,13 +926,10 @@ def train():
         print("Run future prediction.")
         with torch.no_grad():
             testsavedir = os.path.join(basedir, expname, "run_future_pred_{:06d}".format(start))
+            shutil.rmtree(testsavedir, ignore_errors=True)
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
-            N_timesteps = images_test.shape[0]
-            test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-            render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-            get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
 
             run_future_pred(
                 test_view_poses,
@@ -950,7 +948,7 @@ def train():
                 project_solver=project_solver,
                 render=render,
                 get_vel_der_fn=get_vel_der_fn,
-                save_fields=args.save_fields,
+                vort_particles=vort_particles,
                 **render_kwargs_test,
             )
             return
@@ -959,10 +957,9 @@ def train():
     N_rand = args.N_rand
     # For random ray batching
     print("get rays")
+
     rays = []
     ij = []
-
-    # anti-aliasing
     for p in poses_train[:, :3, :4]:
         r_o, r_d, i_, j_ = get_rays_np_continuous(H, W, K, p)
         rays.append([r_o, r_d])
@@ -987,6 +984,7 @@ def train():
     loss_list = []
     psnr_list = []
     start = start + 1
+    vort_loss_meter = AverageMeter()
     loss_meter, psnr_meter = AverageMeter(), AverageMeter()
     flow_loss_meter, scale_meter, norm_meter = AverageMeter(), AverageMeter(), AverageMeter()
     u_loss_meter, v_loss_meter, w_loss_meter, d_loss_meter = (
@@ -995,20 +993,7 @@ def train():
         AverageMeter(),
         AverageMeter(),
     )
-    proj_loss_meter = AverageMeter()
-    den2vel_loss_meter = AverageMeter()
     vel_loss_meter = AverageMeter()
-
-    print("creating grid")
-    # construct simulation domain grid
-    xs, ys, zs = torch.meshgrid(
-        [torch.linspace(0, 1, rx), torch.linspace(0, 1, ry), torch.linspace(0, 1, rz)], indexing="ij"
-    )
-    coord_3d_sim = torch.stack([xs, ys, zs], dim=-1)  # [X, Y, Z, 3]
-    coord_3d_world = bbox_model.sim2world(coord_3d_sim)  # [X, Y, Z, 3]
-
-    print("done")
-
     print("start training: from {} to {}".format(start, args.N_iters))
 
     resample_rays = False
@@ -1020,22 +1005,10 @@ def train():
 
         i_batch += N_rand
         # temporal bilinear sampling
-        time_idx = torch.randperm(T)[: args.N_time].float().to(device)  # [N_t]
-        time_idx += torch.randn(args.N_time) - 0.5  # -0.5 ~ 0.5
-        time_idx_floor = torch.floor(time_idx).long()
-        time_idx_ceil = torch.ceil(time_idx).long()
-        time_idx_floor = torch.clamp(time_idx_floor, 0, T - 1)
-        time_idx_ceil = torch.clamp(time_idx_ceil, 0, T - 1)
-        time_idx_residual = time_idx - time_idx_floor.float()
-        frames_floor = images_train[time_idx_floor]  # [N_t, VHW, 3]
-        frames_ceil = images_train[time_idx_ceil]  # [N_t, VHW, 3]
-        frames_interp = frames_floor * (1 - time_idx_residual).unsqueeze(
-            -1
-        ) + frames_ceil * time_idx_residual.unsqueeze(
-            -1
-        )  # [N_t, VHW, 3]
+        time_idx = torch.randperm(T)[: args.N_time]
         time_step = time_idx / (T - 1) if T > 1 else torch.zeros_like(time_idx)
-        points = frames_interp[:, batch_ray_idx]  # [N_t, B, 3]
+        frames = images_train[time_idx]  # [N_t, :, 3]
+        points = frames[:, batch_ray_idx]  # [N_t, B, 3]
         # points = torch.from_numpy(points).to(device)
         target_s = points.flatten(0, 1)  # [N_t*B, 3]
 
@@ -1045,9 +1018,9 @@ def train():
             i_batch = 0
             resample_rays = True
 
-        #####  Core optimization loop  #####
         optimizer.zero_grad()
-        optimizer_vel.zero_grad()
+
+        optimizer_vort.zero_grad()
 
         extras = render(H, W, K, rays=batch_rays, time_step=time_step, **render_kwargs_train)
         rgb = extras[0]
@@ -1066,9 +1039,12 @@ def train():
         _d_y = extras["_d_y"]
         _d_z = extras["_d_z"]
 
-        split_nse = PDE_EQs(_d_t, _d_x, _d_y, _d_z, raw_vel, raw_f, _u_t, _u_x, _u_y, _u_z, detach=args.detach_vel)
+        vel_vort = vort_particles(pts[..., :3], time_idx.item(), chunk=1000)
+        raw_vel = raw_vel + vel_vort
+        split_nse = PDE_EQs(_d_t, _d_x, _d_y, _d_z, raw_vel, raw_f, _u_t, _u_x, _u_y, _u_z)
         nse_errors = [mean_squared_error(x, 0.0) for x in split_nse]
         if torch.stack(nse_errors).sum() > 10000:
+            # print('dt, dx, dy, dz', _d_t.max(), _d_x.max(), _d_y.max(), _d_z.max())
             print(f"skip large loss {torch.stack(nse_errors).sum():.3g}, timestep={pts[0,3]}")
             continue
 
@@ -1089,85 +1065,30 @@ def train():
         scale_meter.update(nse_errors[-1].item())
         norm_meter.update((split_nse_wei[-1] * nse_errors[-1]).item())
         if not args.no_vel_der:
-            u_loss_meter.update((nse_errors[1]).item())
-            v_loss_meter.update((nse_errors[2]).item())
-            w_loss_meter.update((nse_errors[3]).item())
-            d_loss_meter.update((nse_errors[4]).item())
+            u_loss_meter.update((split_nse_wei[1] * nse_errors[1]).item())
+            v_loss_meter.update((split_nse_wei[2] * nse_errors[2]).item())
+            w_loss_meter.update((split_nse_wei[3] * nse_errors[3]).item())
+            d_loss_meter.update((split_nse_wei[4] * nse_errors[4]).item())
 
         for ei, wi in zip(nse_errors, split_nse_wei):
             nse_loss_fine = ei * wi + nse_loss_fine
 
-        if args.proj_weight > 0:
-            # initialize density field
-            coord_time_step = torch.ones_like(coord_3d_world[..., :1]) * time_step[0]
-            coord_4d_world = torch.cat([coord_3d_world, coord_time_step], dim=-1)  # [X, Y, Z, 4]
-            vel_world = batchify_query(coord_4d_world, render_kwargs_train_vel["network_vel_fn"])  # [X, Y, Z, 3]
-            # y_start = args.y_start
-            vel_world_supervised = vel_world.detach().clone()
-            # vel_world_supervised[:, y_start:y_start + proj_y] = project_solver.Poisson(
-            #     vel_world_supervised[:, y_start:y_start + proj_y])
-
-            vel_world_supervised[..., 2] *= -1
-            vel_world_supervised[:, y_start : y_start + proj_y] = project_solver.Poisson(
-                vel_world_supervised[:, y_start : y_start + proj_y]
-            )
-            vel_world_supervised[..., 2] *= -1
-
-            proj_loss = img2mse(vel_world_supervised, vel_world)
-        else:
-            proj_loss = torch.zeros_like(img_loss)
-
-        if args.d2v_weight > 0:
-            # regularization on too small and too large value
-            raw_d = extras["raw_d"]
-            viz_dens_mask = raw_d.detach() > 0.1
-            vel_norm = raw_vel.norm(dim=-1, keepdim=True)
-            min_vel_mask = vel_norm.detach() < args.coef_den2vel * raw_d.detach()
-            vel_reg_mask = min_vel_mask & viz_dens_mask
-            min_vel_reg_map = (args.coef_den2vel * raw_d - vel_norm) * vel_reg_mask.float()
-            min_vel_reg = min_vel_reg_map.pow(2).mean()
-            # ipdb.set_trace()
-        else:
-            min_vel_reg = torch.zeros_like(img_loss)
-
-        proj_loss_meter.update(proj_loss.item())
-        den2vel_loss_meter.update(min_vel_reg.item())
-
-        vel_loss = (
-            nse_loss_fine + args.rec_weight * img_loss + args.proj_weight * proj_loss + args.d2v_weight * min_vel_reg
-        )
+        total_intensity = vort_particles.particle_intensity_raw.clamp(0, 1).sum()
+        total_radius = torch.relu(vort_particles.radius).sum()
+        vort_loss = torch.max(torch.tensor([0]), args.vort_intensity - total_intensity).pow(2)
+        vort_loss_meter.update(vort_loss.item())
+        vel_loss = nse_loss_fine + args.rec_weight * img_loss + args.vort_weight * vort_loss
         vel_loss_meter.update(vel_loss.item())
         vel_loss.backward()
 
-        if args.debug:
-            print("vel loss", vel_loss.item())
-            print("img loss", args.rec_weight * img_loss.item())
-            print("testing gradients")
-            grad_vel = render_kwargs_train_vel["network_fn"].sigma_net[0].weight.grad
-            print("vel", grad_vel)
-            if grad_vel is not None:
-                print("vel", grad_vel.max(), grad_vel.min(), grad_vel.shape)
-            grad_hash_table = render_kwargs_train_vel["embed_fn"].hash_table.grad
-            print("hash_table", grad_hash_table)
-            if grad_hash_table is not None:
-                print("hash_table", grad_hash_table.max(), grad_hash_table.min(), grad_hash_table.shape)
-            grad_density = render_kwargs_train["network_fn"].sigma_net[0].weight.grad
-            print("density", grad_density)
-            if grad_density is not None:
-                print("density", grad_density.max(), grad_density.min(), grad_density.shape)
-            grad_hash_table = render_kwargs_train["embed_fn"].hash_table.grad
-            print("hash_table", grad_hash_table)
-            if grad_hash_table is not None:
-                print("hash_table", grad_hash_table.max(), grad_hash_table.min(), grad_hash_table.shape)
-
-        optimizer_vel.step()
+        optimizer_vort.step()
         optimizer.step()
 
         ###   update learning rate   ###
         decay_rate = 0.1
         decay_steps = args.lrate_decay
         new_lrate = args.lrate * (decay_rate ** (global_step / decay_steps))
-        for param_group in optimizer_vel.param_groups:
+        for param_group in optimizer_vort.param_groups:
             param_group["lr"] = new_lrate
         ################################
         # Rest is logging
@@ -1192,47 +1113,46 @@ def train():
                 },
                 path,
             )
+            path = os.path.join(basedir, expname, "vort", "{:06d}.tar".format(i))
+            torch.save(vort_particles.state_dict(), path)
 
             print("Saved checkpoints at", path)
 
-        if i % args.i_video == 0 and i > 0:
+        if i % args.i_video == 0 or i == 1:
             # Turn on testing mode
-            testsavedir = os.path.join(basedir, expname, "testset_{:06d}".format(i))
-            os.makedirs(testsavedir, exist_ok=True)
+            print("Run advect density.")
+            with torch.no_grad():
+                testsavedir = os.path.join(basedir, expname, "run_advect_den_{:06d}".format(i))
+                os.makedirs(testsavedir, exist_ok=True)
+                test_view_pose = torch.tensor(poses_test[0])
+                N_timesteps = images_test.shape[0]
+                test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
+                test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
+                render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
+                run_advect_den(
+                    test_view_poses,
+                    hwf,
+                    K,
+                    time_steps=test_timesteps,
+                    savedir=testsavedir,
+                    gt_imgs=images_test,
+                    bbox_model=bbox_model,
+                    rx=rx,
+                    ry=ry,
+                    rz=rz,
+                    y_start=y_start,
+                    proj_y=proj_y,
+                    use_project=use_project,
+                    project_solver=project_solver,
+                    render=render,
+                    get_vel_der_fn=get_vel_der_fn,
+                    vort_particles=vort_particles,
+                    **render_kwargs_test,
+                )
 
-            if i % (args.i_video) == 0:
-                print("Run advect density.")
-                with torch.no_grad():
-                    testsavedir = os.path.join(basedir, expname, "run_advect_den_{:06d}".format(i))
-                    os.makedirs(testsavedir, exist_ok=True)
-                    test_view_pose = torch.tensor(poses_test[0])
-                    N_timesteps = images_test.shape[0]
-                    test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
-                    test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-                    render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
-                    run_advect_den(
-                        test_view_poses,
-                        hwf,
-                        K,
-                        time_steps=test_timesteps,
-                        savedir=testsavedir,
-                        gt_imgs=images_test,
-                        bbox_model=bbox_model,
-                        rx=rx,
-                        ry=ry,
-                        rz=rz,
-                        y_start=y_start,
-                        proj_y=proj_y,
-                        use_project=use_project,
-                        project_solver=project_solver,
-                        render=render,
-                        **render_kwargs_test,
-                    )
         if i % args.i_print == 0:
             tqdm.write(
-                f"[TRAIN] Iter: {i} Rec Loss:{loss_meter.avg:.2g} PSNR:{psnr_meter.avg:.4g} Flow Loss: {flow_loss_meter.avg:.2g}, "
-                f"U loss: {u_loss_meter.avg:.2g}, V loss: {v_loss_meter.avg:.2g}, W loss: {w_loss_meter.avg:.2g},"
-                f" d loss: {d_loss_meter.avg:.2g}, proj Loss:{proj_loss_meter.avg:.2g}, den2vel loss:{den2vel_loss_meter.avg:.2g}, Vel Loss: {vel_loss_meter.avg:.2g} "
+                f"[TRAIN] Iter: {i} PSNR:{psnr_meter.avg:.4g} Flow Loss: {flow_loss_meter.avg:.2g}, Vort Loss: {vort_loss_meter.avg:.2g}, Total intense: {total_intensity.item()}, Total r: {total_radius}"
             )
             loss_list.append(loss_meter.avg)
             psnr_list.append(psnr_meter.avg)
@@ -1250,6 +1170,7 @@ def train():
             v_loss_meter.reset()
             w_loss_meter.reset()
             d_loss_meter.reset()
+            vort_loss_meter.reset()
 
             with open(os.path.join(basedir, expname, "loss_vs_time.json"), "w") as fp:
                 json.dump(loss_psnr, fp)
@@ -1273,6 +1194,7 @@ def train():
 
             # Move training data to GPU
             images_train = torch.Tensor(images_train).flatten(start_dim=1, end_dim=3)  # [T, VHW, 3]
+
             rays = torch.Tensor(rays).to(device)
 
             ray_idxs = torch.randperm(rays.shape[0])
@@ -1284,7 +1206,13 @@ def train():
 
 if __name__ == "__main__":
     lt.monkey_patch()
-    pretty.install()
     torch.set_default_tensor_type("torch.cuda.FloatTensor")
-
     train()
+    # import ipdb
+
+    # try:
+    #     train()
+    # except Exception as e:
+    #     print(e)
+    #     ipdb.post_mortem()
+    # # train()

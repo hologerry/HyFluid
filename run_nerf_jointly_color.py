@@ -18,7 +18,6 @@ from parser_helper import config_parser_joint as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
-    NeRFSmall_bg,
     NeRFSmallPotential,
     batchify_query,
     get_rays,
@@ -284,24 +283,16 @@ def create_nerf(args):
     input_ch = embed_fn.num_scales * 2  # default 2 params per scale
     embedding_params = list(embed_fn.parameters())
 
-    if "scalar" in args.datadir.lower():
-        model = NeRFSmall(
-            num_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            num_layers_color=2,
-            hidden_dim_color=16,
-            input_ch=input_ch,
-        ).cuda()
-    else:
-        model = NeRFSmall_bg(
-            num_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            num_layers_color=2,
-            hidden_dim_color=16,
-            input_ch=input_ch,
-        ).cuda()
+    model = NeRFSmall(
+        num_layers=2,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        num_layers_color=2,
+        hidden_dim_color=16,
+        input_ch=input_ch,
+        output_ch=4,
+    ).cuda()
+
     print(model)
     print(
         "Total number of trainable parameters in model: {}".format(
@@ -501,7 +492,7 @@ def raw2outputs(raw, z_vals, rays_d, learned_rgb=None, render_vel=False):
         N_samples = raw.shape[1]
         rgb_map = raw[:, int(N_samples / 3.5), :3] * mask[:, int(N_samples / 3.5), None]
     else:
-        rgb = torch.ones(3) * (0.6 + torch.tanh(learned_rgb) * 0.4)
+        rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
         rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1) / (torch.sum(weights, -1) + 1e-10)
@@ -581,7 +572,7 @@ def render_rays(
         raw_flat_vel = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_vel[bbox_mask] = network_query_fn_vel(pts)[0]  # raw_vel
         raw_vel = raw_flat_vel.reshape(N_rays, N_samples, out_dim)
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_den[bbox_mask] = network_query_fn(pts)  # raw_den
         raw_den = raw_flat_den.reshape(N_rays, N_samples, out_dim)
@@ -616,7 +607,7 @@ def render_rays(
                 pts = pts_maccorck
 
         # query density
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat_den[bbox_mask] = network_query_fn(pts)  # raw_den
         raw_den = raw_flat_den.reshape(N_rays, N_samples, out_dim)
@@ -626,7 +617,7 @@ def render_rays(
         ret["rgb_map"] = rgb_map
     elif render_grid:  # render from a voxel grid
         assert den_grid is not None, "den_grid must be specified for render_grid."
-        out_dim = 1
+        out_dim = 4
         raw_flat_den = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
 
         pts_world = pts[..., :3]
@@ -671,7 +662,7 @@ def render_rays(
         ret["_d_y"] = _d_y
         ret["_d_z"] = _d_z
         ret["_d_t"] = _d_t
-        out_dim = 1
+        out_dim = 4
         raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim)
         raw_flat[bbox_mask] = raw_d
         raw = raw_flat.reshape(N_rays, N_samples, out_dim)

@@ -1,6 +1,7 @@
 import json
 import os
 
+import cv2
 import imageio
 import lovely_tensors as lt
 import lpips
@@ -8,9 +9,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import taichi as ti
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from skimage.metrics import structural_similarity
+from torchvision.utils import save_image
 from tqdm import tqdm, trange
 
 from load_realcapture import load_real_capture_frame_data
@@ -197,6 +200,7 @@ def create_nerf(args):
         num_layers_color=2,
         hidden_dim_color=16,
         input_ch=input_ch,
+        output_ch=4,
     ).cuda()
     print(model)
     print(
@@ -278,11 +282,10 @@ def raw2outputs(raw, z_vals, rays_d, learned_rgb=None):
 
     dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
 
-    rgb = torch.ones(3) * (0.6 + torch.tanh(learned_rgb) * 0.4)
-    # rgb = 0.6 + torch.tanh(learned_rgb) * 0.4
+    rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
     noise = 0.0
 
-    alpha = raw2alpha(raw[..., -1] + noise, dists)  # [N_rays, N_samples]
+    alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
     weights = (
         alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.0 - alpha + 1e-10], -1), -1)[:, :-1]
     )  # [N_rays, N_samples]
@@ -340,7 +343,7 @@ def render_rays(ray_batch, network_query_fn, N_samples, retraw=False, perturb=0.
     pts_time_step = time_step[..., None, None].expand(-1, pts.shape[1], -1)
     pts = torch.cat([pts, pts_time_step], -1)  # [..., 4]
     pts_flat = torch.reshape(pts, [-1, 4])
-    out_dim = 1
+    out_dim = 4
     raw_flat = torch.zeros([N_rays, N_samples, out_dim]).reshape(-1, out_dim).cuda()
 
     # np.savetxt("logs/pts_flat.txt", pts_flat.cpu().numpy())

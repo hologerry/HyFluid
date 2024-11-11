@@ -276,7 +276,8 @@ def create_nerf(args):
         num_layers_color=2,
         hidden_dim_color=16,
         input_ch=input_ch,
-    ).to(device)
+    ).cuda()
+
     print(model)
     print(
         "Total number of trainable parameters in model: {}".format(
@@ -820,6 +821,7 @@ def train():
     render_kwargs_test.update(network_query_fn_vel=render_kwargs_test_vel["network_vel_fn"])
     render_kwargs_test.update(save_fields=args.save_fields)
     get_vel_der_fn = lambda pts: get_velocity_and_derivatives(pts, no_vel_der=False, **render_kwargs_test_vel)
+
     if args.run_without_vort:
         vort_particles = None
     else:
@@ -887,6 +889,7 @@ def train():
                 **render_kwargs_test,
             )
             return
+
     if args.run_advect_den:
         print("Run advect density.")
         with torch.no_grad():
@@ -914,9 +917,11 @@ def train():
                 get_vel_der_fn=get_vel_der_fn,
                 vort_particles=vort_particles,
                 save_den=args.save_den,
+                save_fields=True,
                 **render_kwargs_test,
             )
             return
+
     if args.run_future_pred:
         print("Run future prediction.")
         with torch.no_grad():
@@ -1144,6 +1149,7 @@ def train():
                     vort_particles=vort_particles,
                     **render_kwargs_test,
                 )
+
         if i % args.i_print == 0:
             tqdm.write(
                 f"[TRAIN] Iter: {i} PSNR:{psnr_meter.avg:.4g} Flow Loss: {flow_loss_meter.avg:.2g}, Vort Loss: {vort_loss_meter.avg:.2g}, Total intense: {total_intensity.item()}, Total r: {total_radius}"

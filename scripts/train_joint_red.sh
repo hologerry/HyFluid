@@ -1,9 +1,9 @@
 python run_nerf_jointly.py \
-    --config configs/realcapture_blue.txt \
+    --config configs/realcapture_red.txt \
     --lrate_decay 100000 \
     --N_iters 100000 \
     --i_weights 10000 \
-    --expname exp_p_v128_128_view2_blue \
+    --expname exp_p_v128_128_view2_red \
     --lrate 5e-4 \
     --lrate_den 1e-4 \
     --rec_weight 10000 \
@@ -24,7 +24,7 @@ python run_nerf_jointly.py \
     --N_samples 192 \
     --N_rand 512 \
     --log2_hashmap_size 19 \
-    --ft_path ./logs/exp_density_256_128_view2_blue/100000.tar \
+    --ft_path ./logs/exp_density_256_128_view2_red/300000.tar \
     --vel_scale 0.025 \
     --finest_resolution_v 128 \
     --base_resolution_v 16 \

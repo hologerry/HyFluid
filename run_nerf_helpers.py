@@ -1,7 +1,5 @@
 import numpy as np
 import torch
-
-# torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -175,6 +173,7 @@ class NeRFSmall(nn.Module):
         num_layers_color=2,
         hidden_dim_color=16,
         input_ch=3,
+        output_ch=1,
     ):
         super(NeRFSmall, self).__init__()
 
@@ -194,7 +193,7 @@ class NeRFSmall(nn.Module):
                 in_dim = hidden_dim
 
             if l == num_layers - 1:
-                out_dim = 1  # 1 sigma + 15 SH features for color
+                out_dim = output_ch  # 1 sigma + 15 SH features for color
             else:
                 out_dim = hidden_dim
 
@@ -202,19 +201,19 @@ class NeRFSmall(nn.Module):
 
         self.sigma_net = nn.ModuleList(sigma_net)
 
-        self.color_net = []
-        for l in range(num_layers_color):
-            if l == 0:
-                in_dim = 1
-            else:
-                in_dim = hidden_dim_color
+        # self.color_net = []
+        # for l in range(num_layers_color):
+        #     if l == 0:
+        #         in_dim = 1
+        #     else:
+        #         in_dim = hidden_dim_color
 
-            if l == num_layers_color - 1:
-                out_dim = 1
-            else:
-                out_dim = hidden_dim_color
+        #     if l == num_layers_color - 1:
+        #         out_dim = 1
+        #     else:
+        #         out_dim = hidden_dim_color
 
-            self.color_net.append(nn.Linear(in_dim, out_dim, bias=True))
+        #     self.color_net.append(nn.Linear(in_dim, out_dim, bias=True))
 
     def forward(self, x):
         h = x
