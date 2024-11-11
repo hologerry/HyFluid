@@ -12,24 +12,32 @@ from rich import pretty
 from torch.func import jacrev, vmap
 from tqdm import tqdm, trange
 
+from density_to_velocity import DenToVel
 from load_realcapture import load_real_capture_frame_data
 from load_scalarflow import load_pinf_frame_data
 from parser_helper import config_parser_joint as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
-    NeRFSmall_bg,
     NeRFSmallPotential,
+    SIREN_vel,
+    Voxel_Tool,
+    batchify,
     batchify_query,
     get_rays,
     get_rays_np,
     get_rays_np_continuous,
+    get_voxel_pts,
     img2mse,
+    jacobian3D,
     mean_squared_error,
     mse2psnr,
+    off_smoke2world,
     sample_bilinear,
     save_quiver_plot,
     to8b,
+    vel_smoke2world,
+    vel_world2smoke,
 )
 from taichi_encoders.mgpcg import MGPCG_3
 from utils import (
@@ -944,6 +952,120 @@ def train():
                 **render_kwargs_test,
             )
             return
+
+    if args.run_nse:
+        print("Run Navier-Stokes equation.")
+        with torch.no_grad():
+            # D=6, W=128, input_ch=4, output_ch=3, skips=[],
+            d2v_model = DenToVel().cuda()
+            vel_model = SIREN_vel(fading_fin_step=args.fading_layers, bbox_model=bbox_model).cuda()
+
+            img_i = -1
+            time_locate = torch.Tensor(test_timesteps[img_i]).cuda()
+            delta_t = 1.0 / 120.0
+            t_info = np.float32([0.0, 1.0, 0.5, delta_t])  # min t, max t, mean t, delta_t
+
+            train_reso_scale = torch.Tensor([256 * t_info[-1], 256 * t_info[-1], 256 * t_info[-1]]).cuda()
+
+            min_ratio = float(64 + 4 * 2) / min(voxel_scale[0], voxel_scale[1], voxel_scale[2])
+            minX = int(min_ratio * voxel_scale[0] + 0.5)
+            trainX = max(args.vol_output_W, minX)  # a minimal resolution of 64^3
+            trainY = int(trainX * float(voxel_scale[1]) / voxel_scale[0] + 0.5)
+            trainZ = int(trainX * float(voxel_scale[2]) / voxel_scale[0] + 0.5)
+            training_voxel = Voxel_Tool(
+                voxel_tran, voxel_tran_inv, voxel_scale, trainZ, trainY, trainX, middleView="mid3"
+            )
+
+            denTW = 64  # 256 will be 30 times slower
+            d2v_min_border = 2
+            denRatio = float(denTW + 2 * d2v_min_border) / min(trainX, trainY, trainZ)
+            den_p_all = get_voxel_pts(
+                int(trainY * denRatio + 1e-6),
+                int(trainX * denRatio + 1e-6),
+                int(trainZ * denRatio + 1e-6),
+                voxel_tran,
+                voxel_scale,
+            )
+
+            offset_w = np.int32(
+                np.random.uniform(d2v_min_border, int(trainX * denRatio + 1e-6) - denTW - d2v_min_border, [])
+            )
+            offset_h = np.int32(
+                np.random.uniform(d2v_min_border, int(trainY * denRatio + 1e-6) - denTW - d2v_min_border, [])
+            )
+            offset_d = np.int32(
+                np.random.uniform(d2v_min_border, int(trainZ * denRatio + 1e-6) - denTW - d2v_min_border, [])
+            )
+            den_p_crop = den_p_all[
+                offset_d : offset_d + denTW : 2,
+                offset_h : offset_h + denTW : 2,
+                offset_w : offset_w + denTW : 2,
+                :,
+            ]
+            training_samples = torch.reshape(den_p_crop, (-1, 3))
+
+            training_samples = training_samples.view(-1, 3)
+            training_t = torch.ones([training_samples.shape[0], 1]) * time_locate
+            training_samples = torch.cat([training_samples, training_t], dim=-1)
+
+            #####  core velocity optimization loop  #####
+            # allows to take derivative w.r.t. training_samples
+            training_samples = training_samples.clone().detach().requires_grad_(True)
+            _vel, _u_x, _u_y, _u_z, _u_t = training_voxel.get_velocity_and_derivatives(
+                training_samples, chunk=args.chunk, batchify_fn=batchify, vel_model=vel_model
+            )
+            _den, _d_x, _d_y, _d_z, _d_t = training_voxel.get_density_and_derivatives(
+                training_samples,
+                chunk=args.chunk,
+                use_viewdirs=False,
+                network_query_fn=render_kwargs_test["network_query_fn"],
+                network_fn=render_kwargs_test["network_fine" if args.N_importance > 0 else "network_fn"],
+            )
+
+            # get vorticity in 32^3 smoke resolution coord for training
+            # in trainZ, trainY, trainX resolution space
+            _den_voxel = _den.detach().view(1, 1, 32, 32, 32)  # b,c,DHW
+            den_mask = torch.where(_den_voxel > 1e-6, torch.ones_like(_den_voxel), torch.zeros_like(_den_voxel)).view(
+                32, 32, 32, 1
+            )
+
+            if torch.mean(den_mask) > 0.05:  # at least 5 percent are valid
+                den_voxel_raw = F.interpolate(_den_voxel, size=64, mode="trilinear", align_corners=False) / (
+                    _den_voxel.max() + 1e-8
+                )
+                vel_d2v_smoke = d2v_model(den_voxel_raw).permute([0, -1, 1, 2, 3])  # 1,3,64,64,64
+                vel_d2v_smoke = F.interpolate(vel_d2v_smoke, size=32, mode="trilinear", align_corners=False).permute(
+                    [0, 2, 3, 4, 1]
+                )
+                # 1,32,32,32,3
+                # scale according to vel_pred_smoke_view
+                vel_pred_smoke_view = vel_world2smoke(
+                    _vel.detach(), voxel_tran_inv, voxel_scale, train_reso_scale
+                ).view(32, 32, 32, 3)
+                scale_factor = torch.mean(
+                    torch.sqrt(torch.sum(torch.square(vel_pred_smoke_view * den_mask), dim=-1) + 1e-8)
+                )
+                scale_factor = scale_factor / torch.mean(
+                    torch.sqrt(torch.sum(torch.square(vel_d2v_smoke * den_mask), dim=-1) + 1e-8)
+                )
+                vel_d2v_smoke = vel_d2v_smoke * scale_factor
+
+                # jac in trainZ, trainY, trainX resolution space
+                d2v_jac, d2v_vort = jacobian3D(vel_d2v_smoke)  # 1,32,32,32,9 and 1,32,32,32,3
+                d2v_udx = vel_smoke2world(d2v_jac[..., 0::3], voxel_tran, voxel_scale, train_reso_scale)
+                d2v_udy = vel_smoke2world(d2v_jac[..., 1::3], voxel_tran, voxel_scale, train_reso_scale)
+                d2v_udz = vel_smoke2world(d2v_jac[..., 2::3], voxel_tran, voxel_scale, train_reso_scale)
+                d2v_u_jac = torch.cat([d2v_udx, d2v_udy, d2v_udz], dim=-1).view(32, 32, 32, 9).detach()
+
+                smoke_baseX = off_smoke2world(torch.Tensor([1.0 / 256, 0.0, 0.0]), voxel_tran, voxel_scale)
+                smoke_baseY = off_smoke2world(torch.Tensor([0.0, 1.0 / 256, 0.0]), voxel_tran, voxel_scale)
+                smoke_baseZ = off_smoke2world(torch.Tensor([0.0, 0.0, 1.0 / 256]), voxel_tran, voxel_scale)
+
+            split_nse = PDE_EQs(
+                _d_t.detach(), _d_x.detach(), _d_y.detach(), _d_z.detach(), _vel, _u_t, _u_x, _u_y, _u_z
+            )
+            split_nse_items = []
+            print(f"split_nse: {split_nse}")
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand

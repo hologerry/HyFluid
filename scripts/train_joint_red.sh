@@ -1,7 +1,7 @@
 python run_nerf_jointly.py \
     --config configs/realcapture_red.txt \
     --lrate_decay 100000 \
-    --N_iters 100000 \
+    --N_iters 200000 \
     --i_weights 10000 \
     --expname exp_p_v128_128_view2_red \
     --lrate 5e-4 \
