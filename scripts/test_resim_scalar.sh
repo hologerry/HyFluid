@@ -5,7 +5,7 @@ python run_nerf_vort.py \
     --lrate_decay 5000 \
     --N_iters 10000 \
     --i_weights 5000 \
-    --expname exp_real/vort50 \
+    --expname exp_vort50_scalar \
     --finest_resolution 256 \
     --base_resolution 16 \
     --finest_resolution_t 128 \
@@ -15,8 +15,8 @@ python run_nerf_vort.py \
     --N_rand 512 \
     --log2_hashmap_size 19 \
     --vel_num_layers 2 \
-    --ft_path ./logs/exp_real/p_v128_128/den/100000.tar \
-    --vel_path ./logs/exp_real/p_v128_128/100000.tar \
+    --ft_path ./logs/exp_p_v128_128_view2_scalar/den/010000.tar \
+    --vel_path ./logs/exp_p_v128_128_view2_scalar/010000.tar \
     --no_vel_der \
     --vel_scale 0.05 \
     --finest_resolution_v 128 \

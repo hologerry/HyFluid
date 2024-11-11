@@ -1,11 +1,11 @@
 python run_nerf_vort.py \
-    --config configs/scalarflowreal.txt \
+    --config configs/realcapture_red.txt \
     --lrate 0.01 \
     --lrate_den 1e-4 \
     --lrate_decay 5000 \
     --N_iters 10000 \
     --i_weights 5000 \
-    --expname exp_vort50_scalar \
+    --expname exp_vort50_red \
     --i_video 1000 \
     --i_print 100 \
     --finest_resolution 256 \
@@ -22,8 +22,8 @@ python run_nerf_vort.py \
     --d_weight 0 \
     --flow_weight 0.001 \
     --vel_num_layers 2 \
-    --ft_path ./logs/exp_p_v128_128_view2_scalar/den/010000.tar \
-    --vel_path ./logs/exp_p_v128_128_view2_scalar/010000.tar \
+    --ft_path ./logs/exp_p_v128_128_view2_red/den/010000.tar \
+    --vel_path ./logs/exp_p_v128_128_view2_red/010000.tar \
     --no_vel_der \
     --vel_scale 0.05 \
     --finest_resolution_v 128 \

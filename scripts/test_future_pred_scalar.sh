@@ -6,8 +6,6 @@ python run_nerf_vort.py \
     --N_iters 10000 \
     --i_weights 5000 \
     --expname exp_vort50_scalar \
-    --i_video 1000 \
-    --i_print 100 \
     --finest_resolution 256 \
     --base_resolution 16 \
     --finest_resolution_t 128 \
@@ -16,11 +14,6 @@ python run_nerf_vort.py \
     --N_samples 192 \
     --N_rand 512 \
     --log2_hashmap_size 19 \
-    --rec_weight 10000 \
-    --rec_weight 10000 \
-    --vel_weight 0 \
-    --d_weight 0 \
-    --flow_weight 0.001 \
     --vel_num_layers 2 \
     --ft_path ./logs/exp_p_v128_128_view2_scalar/den/010000.tar \
     --vel_path ./logs/exp_p_v128_128_view2_scalar/010000.tar \
@@ -33,3 +26,4 @@ python run_nerf_vort.py \
     --n_particles 50 \
     --vort_intensity 5 \
     --vort_weight 0.01 \
+    --run_future_pred \

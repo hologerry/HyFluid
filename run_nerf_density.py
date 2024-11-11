@@ -13,8 +13,8 @@ import torch.nn.functional as F
 from skimage.metrics import structural_similarity
 from tqdm import tqdm, trange
 
-from load_scalarflow import load_pinf_frame_data
 from load_realcapture import load_real_capture_frame_data
+from load_scalarflow import load_pinf_frame_data
 from parser_helper import config_parser_density as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
@@ -559,10 +559,10 @@ def train():
 
         if i % args.i_video == 0 and i > 0:
             # Turn on testing mode
-            testsavedir = os.path.join(basedir, expname, "spiral_{:06d}".format(i))
-            os.makedirs(testsavedir, exist_ok=True)
-            with torch.no_grad():
-                render_path(render_poses, hwf, K, render_kwargs_test, time_steps=render_timesteps, savedir=testsavedir)
+            # testsavedir = os.path.join(basedir, expname, "spiral_{:06d}".format(i))
+            # os.makedirs(testsavedir, exist_ok=True)
+            # with torch.no_grad():
+            #     render_path(render_poses, hwf, K, render_kwargs_test, time_steps=render_timesteps, savedir=testsavedir)
 
             testsavedir = os.path.join(basedir, expname, "testset_{:06d}".format(i))
             os.makedirs(testsavedir, exist_ok=True)

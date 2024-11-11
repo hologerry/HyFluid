@@ -77,9 +77,11 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
 
     frames = meta["frames"]
     if split == "train":
-        target_cam_names = ["0", "1", "3", "4"]
-    else:
         target_cam_names = ["2"]
+    else:
+        # target_cam_names = ["0", "1", "3", "4"]
+        # current code only support single view testing
+        target_cam_names = ["0"]
 
     frame_nums = 120
     if "red" in basedir.lower():
@@ -129,6 +131,8 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     imgs = np.transpose(imgs, [1, 0, 2, 3, 4])  # [T, V, H, W, 3]
     poses = np.stack(all_poses, 0)  # [V, 4, 4]
     hwf = np.float32([H, W, Focal])
+
+    print(f"real capture {split} {imgs.shape}, {poses.shape}, {hwf}")
 
     # set render settings:
     sp_n = 120  # an even number!

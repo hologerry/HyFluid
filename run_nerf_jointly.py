@@ -12,6 +12,7 @@ from rich import pretty
 from torch.func import jacrev, vmap
 from tqdm import tqdm, trange
 
+from load_realcapture import load_real_capture_frame_data
 from load_scalarflow import load_pinf_frame_data
 from parser_helper import config_parser_joint as config_parser
 from radam import RAdam
@@ -764,13 +765,21 @@ def train():
     boundary_types = ti.Matrix([[1, 1], [2, 1], [1, 1]], ti.i32)  # boundaries: 1 means Dirichlet, 2 means Neumann
     project_solver = MGPCG_3(boundary_types=boundary_types, N=[rx, proj_y, rz], base_level=3)
 
-    # Load data
-    images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-        load_pinf_frame_data(args.datadir, args.half_res, split="train")
-    )
-    images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-        load_pinf_frame_data(args.datadir, args.half_res, split="test")
-    )
+    if "scalar" in args.datadir.lower():
+        # Load data
+        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_pinf_frame_data(args.datadir, args.half_res, split="train")
+        )
+        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_pinf_frame_data(args.datadir, args.half_res, split="test")
+        )
+    else:
+        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_real_capture_frame_data(args.datadir, args.half_res, split="train")
+        )
+        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
+            load_real_capture_frame_data(args.datadir, args.half_res, split="test")
+        )
     global bbox_model
     voxel_tran_inv = np.linalg.inv(voxel_tran)
     bbox_model = BBoxTool(voxel_tran_inv, voxel_scale)

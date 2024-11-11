@@ -68,7 +68,10 @@ def load_pinf_frame_data(basedir, half_res=False, split="train"):
     # read video frames
     # all videos should be synchronized, having the same frame_rate and frame_num
 
-    video_list = meta[split + "_videos"] if (split + "_videos") in meta else meta["train_videos"][0:1]
+    video_list = meta[split + "_videos"] # if (split + "_videos") in meta else meta["train_videos"][0:1]
+    if split == "test":
+        video_list = video_list[0:1]
+        # current only support single view testing
 
     for video_id, train_video in enumerate(video_list):
         imgs = []
@@ -114,6 +117,8 @@ def load_pinf_frame_data(basedir, half_res=False, split="train"):
     imgs = np.transpose(imgs, [1, 0, 2, 3, 4])  # [T, V, H, W, 3]
     poses = np.stack(all_poses, 0)  # [V, 4, 4]
     hwf = np.float32([H, W, Focal])
+
+    print(f"scalar flow {split} {imgs.shape}, {poses.shape}, {hwf}")
 
     # set render settings:
     sp_n = 120  # an even number!

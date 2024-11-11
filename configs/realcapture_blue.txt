@@ -1,4 +1,4 @@
-expname = realcapture_red
+expname = realcapture_blue
 basedir = ./logs
 datadir = /data/Dynamics/RealCaptureBlackBlueCloudOneData
 
