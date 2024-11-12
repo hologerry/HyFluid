@@ -1061,7 +1061,8 @@ def train():
         nse_errors = [mean_squared_error(x, 0.0) for x in split_nse]
         if torch.stack(nse_errors).sum() > 10000:
             print(f"skip large loss {torch.stack(nse_errors).sum():.3g}, timestep={pts[0,3]}")
-            continue
+            nse_errors = [nse_error * 1e-3 for nse_error in nse_errors]
+            # continue
 
         nse_loss_fine = 0.0
         split_nse_wei = (

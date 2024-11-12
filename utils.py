@@ -568,8 +568,8 @@ def run_future_pred(
     coord_3d_world = bbox_model.sim2world(coord_3d_sim)  # [X, Y, Z, 3]
 
     # initialize density field
-    starting_frame = 89
-    n_pred = 30
+    starting_frame = 120
+    n_pred = 56
     time_step = torch.ones_like(coord_3d_world[..., :1]) * time_steps[starting_frame]
     coord_4d_world = torch.cat([coord_3d_world, time_step], dim=-1)  # [X, Y, Z, 4]
     den = batchify_query(coord_4d_world, render_kwargs["network_query_fn"])  # [X, Y, Z, 1]

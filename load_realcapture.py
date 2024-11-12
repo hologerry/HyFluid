@@ -81,9 +81,9 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     else:
         # target_cam_names = ["0", "1", "3", "4"]
         # current code only support single view testing
-        target_cam_names = ["2"]
+        target_cam_names = ["0"]
 
-    frame_nums = 120
+    frame_nums = 176
     if "red" in basedir.lower():
         print("red")
         start_i = 33

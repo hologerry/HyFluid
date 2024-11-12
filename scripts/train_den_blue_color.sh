@@ -5,7 +5,7 @@ python run_nerf_density_color.py \
     --N_iters 300000 \
     --i_weights 10000 \
     --N_time 1 \
-    --expname exp_density_256_128_view2_blue_color \
+    --expname exp_density_256_128_view2_blue_color_range \
     --i_video 100000 \
     --finest_resolution 256 \
     --base_resolution 16 \

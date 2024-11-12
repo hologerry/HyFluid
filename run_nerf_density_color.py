@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 
 import cv2
 import imageio
@@ -13,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from skimage.metrics import structural_similarity
+from torch.func import jacrev, vmap
 from torchvision.utils import save_image
 from tqdm import tqdm, trange
 
@@ -22,15 +24,30 @@ from parser_helper import config_parser_density as config_parser
 from radam import RAdam
 from run_nerf_helpers import (
     NeRFSmall,
+    NeRFSmallPotential,
+    batchify_query,
     get_rays,
     get_rays_np,
     get_rays_np_continuous,
     img2mse,
+    mean_squared_error,
     mse2psnr,
     sample_bilinear,
+    save_quiver_plot,
     to8b,
 )
-from utils import AverageMeter, BBoxTool, merge_imgs
+from taichi_encoders.mgpcg import MGPCG_3
+from utils import (
+    AverageMeter,
+    BBoxTool,
+    Vortex_Particles,
+    generate_vort_trajectory_curl,
+    merge_imgs,
+    run_advect_den,
+    run_future_pred,
+    run_view_synthesis,
+    write_ply,
+)
 
 
 def batchify_rays(rays_flat, chunk=1024 * 64, **kwargs):
@@ -175,23 +192,23 @@ def create_nerf(args):
 
     # embed_fn, input_ch = get_encoder('hashgrid', input_dim=4, num_levels=args.num_levels, base_resolution=args.base_resolution,
     #                                  finest_resolution=args.finest_resolution, log2_hashmap_size=args.log2_hashmap_size,)
-    if args.encoder == "ingp":
-        max_res = np.array(
-            [args.finest_resolution, args.finest_resolution, args.finest_resolution, args.finest_resolution_t]
-        )
-        min_res = np.array([args.base_resolution, args.base_resolution, args.base_resolution, args.base_resolution_t])
+    # if args.encoder == "ingp":
+    max_res = np.array(
+        [args.finest_resolution, args.finest_resolution, args.finest_resolution, args.finest_resolution_t]
+    )
+    min_res = np.array([args.base_resolution, args.base_resolution, args.base_resolution, args.base_resolution_t])
 
-        embed_fn = Hash4Encoder(
-            max_res=max_res,
-            min_res=min_res,
-            num_scales=args.num_levels,
-            max_params=2**args.log2_hashmap_size,
-        )
-        embed_fn = embed_fn.cuda()
-        input_ch = embed_fn.num_scales * 2  # default 2 params per scale
-        embedding_params = list(embed_fn.parameters())
-    else:
-        raise NotImplementedError
+    embed_fn = Hash4Encoder(
+        max_res=max_res,
+        min_res=min_res,
+        num_scales=args.num_levels,
+        max_params=2**args.log2_hashmap_size,
+    )
+    embed_fn = embed_fn.cuda()
+    input_ch = embed_fn.num_scales * 2  # default 2 params per scale
+    embedding_params = list(embed_fn.parameters())
+    # else:
+    #     raise NotImplementedError
 
     model = NeRFSmall(
         num_layers=2,
@@ -434,15 +451,15 @@ def train():
     if args.render_only:
         print("RENDER ONLY")
         with torch.no_grad():
-            testsavedir = os.path.join(basedir, expname, f"testset_{start:06d}")
+            testsavedir = os.path.join(basedir, expname, f"testset_renderonly_{start:06d}")
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
             N_timesteps = images_test.shape[0]
             test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
             test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
-            print(test_view_poses.shape)
-            test_view_poses = torch.tensor(poses_train[0]).unsqueeze(0).repeat(N_timesteps, 1, 1)
-            print(test_view_poses.shape)
+            # print(test_view_poses.shape)
+            # test_view_poses = torch.tensor(poses_train[0]).unsqueeze(0).repeat(N_timesteps, 1, 1)
+            # print(test_view_poses.shape)
             render_path(
                 test_view_poses,
                 hwf,
@@ -453,6 +470,50 @@ def train():
                 savedir=testsavedir,
             )
         return
+
+    if args.run_future_pred:
+        print("Run future prediction.")
+        with torch.no_grad():
+            rx, ry, rz, proj_y, use_project, y_start = (
+                args.sim_res_x,
+                args.sim_res_y,
+                args.sim_res_z,
+                args.proj_y,
+                args.use_project,
+                args.y_start,
+            )
+            boundary_types = ti.Matrix([[1, 1], [2, 1], [1, 1]], ti.i32)  # boundaries: 1 means Dirichlet, 2 means Neumann
+            project_solver = MGPCG_3(boundary_types=boundary_types, N=[rx, proj_y, rz], base_level=3)
+
+            testsavedir = os.path.join(basedir, expname, "run_future_pred_{:06d}".format(start))
+            shutil.rmtree(testsavedir, ignore_errors=True)
+            os.makedirs(testsavedir, exist_ok=True)
+            test_view_pose = torch.tensor(poses_test[0])
+            N_timesteps = images_test.shape[0]
+            test_timesteps = torch.arange(N_timesteps) / (N_timesteps - 1)
+            test_view_poses = test_view_pose.unsqueeze(0).repeat(N_timesteps, 1, 1)
+
+            run_future_pred(
+                test_view_poses,
+                hwf,
+                K,
+                time_steps=test_timesteps,
+                savedir=testsavedir,
+                gt_imgs=images_test,
+                bbox_model=bbox_model,
+                rx=rx,
+                ry=ry,
+                rz=rz,
+                y_start=y_start,
+                proj_y=proj_y,
+                use_project=use_project,
+                project_solver=project_solver,
+                render=render,
+                get_vel_der_fn=None,
+                vort_particles=None,
+                **render_kwargs_test,
+            )
+            return
 
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand

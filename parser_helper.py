@@ -45,6 +45,56 @@ def config_parser_density():
     parser.add_argument("--feats_dim", type=int, default=36, help="feature dimension of kplanes")
     parser.add_argument("--tv-loss-weight", type=float, default=1e-6, help="learning rate")
 
+    parser.add_argument("--lrate_den", type=float, default=5e-4, help="learning rate")
+    parser.add_argument(
+        "--vel_path", type=str, default=None, help="specific weights npy file to reload for velocity network"
+    )
+
+    parser.add_argument("--train_vel", action="store_true", help="train velocity network")
+    parser.add_argument("--run_advect_den", action="store_true", help="Run advect")
+    parser.add_argument("--run_future_pred", action="store_true", help="Run future prediction")
+    parser.add_argument("--run_view_synthesis", action="store_true", help="Run novel view synthesis (test views)")
+    parser.add_argument(
+        "--run_without_vort",
+        action="store_true",
+        help="by default we use vortex now, this flag will run without vortex",
+    )
+    parser.add_argument("--n_particles", type=int, default=100, help="how many particles to use")
+    parser.add_argument("--sim_res_x", type=int, default=128, help="simulation resolution along X/width axis")
+    parser.add_argument("--sim_res_y", type=int, default=192, help="simulation resolution along Y/height axis")
+    parser.add_argument("--sim_res_z", type=int, default=128, help="simulation resolution along Z/depth axis")
+    parser.add_argument(
+        "--proj_y", type=int, default=128, help="projection resolution along Y/height axis, this must be 2**n"
+    )
+    parser.add_argument(
+        "--y_start", type=int, default=48, help="Within sim_res_y, where to start the projection domain"
+    )
+    parser.add_argument("--use_project", action="store_true", help="use projection in re-simulation?")
+
+    parser.add_argument("--finest_resolution_v", type=int, default=512, help="finest resolution for hashed embedding")
+    parser.add_argument(
+        "--finest_resolution_v_t", type=int, default=256, help="finest resolution for hashed embedding"
+    )
+    parser.add_argument("--base_resolution_v", type=int, default=16, help="base resolution for hashed embedding")
+    parser.add_argument("--base_resolution_v_t", type=int, default=16, help="base resolution for hashed embedding")
+    parser.add_argument("--no_vel_der", action="store_true", help="do not use velocity derivatives-related losses")
+    parser.add_argument(
+        "--save_fields", action="store_true", help="when run_advect_density, save fields for paraview rendering"
+    )
+    parser.add_argument("--vel_num_layers", type=int, default=2, help="number of layers in velocity network")
+    parser.add_argument("--vel_scale", type=float, default=0.01)
+    parser.add_argument("--vel_weight", type=float, default=0.1)
+    parser.add_argument("--d_weight", type=float, default=0.1)
+    parser.add_argument("--flow_weight", type=float, default=0.001)
+    parser.add_argument("--vort_weight", type=float, default=1)
+    parser.add_argument("--vort_intensity", type=float, default=20)
+    parser.add_argument("--vort_radius", type=float, default=0.01)
+    parser.add_argument("--rec_weight", type=float, default=0)
+    parser.add_argument("--sim_steps", type=int, default=1)
+    parser.add_argument("--debug", action="store_true", default=False)
+    parser.add_argument("--save_den", action="store_true", default=False)
+
+
     return parser
 
 
