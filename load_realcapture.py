@@ -52,25 +52,26 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     with open(os.path.join(basedir, "transforms_aligned.json"), "r") as fp:
         # read render settings
         meta = json.load(fp)
-    near = float(meta["near"])
-    far = float(meta["far"])
+    near = float(meta["near"]) / 2.0
+    far = float(meta["far"]) * 2.0
     radius = (near + far) * 0.5
     phi = 20.0
     rotZ = False
     r_center = np.array([0.3382070094283088, 0.38795384153014023, -0.2609209839653898]).astype(np.float32)
 
     # read scene data
+    # x,y,z
     voxel_tran = np.array(
         [
-            [0.0, 0.0, 1.0, 0.081816665828228],
-            [0.0, 1.0, 0.0, -0.044627271592617035],
+            [0.0, 0.0, 1.0, -0.11816665828228],
+            [0.0, 1.0, 0.0, -0.044627271592617035 * 5.0],
             [-1.0, 0.0, 0.0, -0.004908999893814325],
             [0.0, 0.0, 0.0, 1.0],
         ]
     )
     # swap_zx
     voxel_tran = np.stack([voxel_tran[:, 2], voxel_tran[:, 1], voxel_tran[:, 0], voxel_tran[:, 3]], axis=1)
-    voxel_scale = np.broadcast_to([0.4909, 0.73635, 0.4909], [3])
+    voxel_scale = np.broadcast_to([0.5009 * 2.0, 0.73635 * 2.0, 0.4909 * 2.0], [3])
 
     # read video frames
     # all videos should be synchronized, having the same frame_rate and frame_num
@@ -81,9 +82,9 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     else:
         # target_cam_names = ["0", "1", "3", "4"]
         # current code only support single view testing
-        target_cam_names = ["0"]
+        target_cam_names = ["2"]
 
-    frame_nums = 176
+    frame_nums = 120
     if "red" in basedir.lower():
         print("red")
         start_i = 33
@@ -134,13 +135,5 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
 
     print(f"real capture {split} {imgs.shape}, {poses.shape}, {hwf}")
 
-    # set render settings:
-    sp_n = 120  # an even number!
-    sp_poses = [
-        pose_spherical(angle, phi, radius, rotZ, r_center[0], r_center[1], r_center[2])
-        for angle in np.linspace(-180, 180, sp_n + 1)[:-1]
-    ]
-    render_poses = torch.stack(sp_poses, 0)  # [sp_poses[36]]*sp_n, for testing a single pose
-    render_timesteps = np.arange(sp_n) / (sp_n - 1)
 
-    return imgs, poses, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far
+    return imgs, poses, hwf, voxel_tran, voxel_scale, near, far

@@ -120,13 +120,13 @@ def load_pinf_frame_data(basedir, half_res=False, split="train"):
 
     print(f"scalar flow {split} {imgs.shape}, {poses.shape}, {hwf}")
 
-    # set render settings:
-    sp_n = 120  # an even number!
-    sp_poses = [
-        pose_spherical(angle, phi, radius, rotZ, r_center[0], r_center[1], r_center[2])
-        for angle in np.linspace(-180, 180, sp_n + 1)[:-1]
-    ]
-    render_poses = torch.stack(sp_poses, 0)  # [sp_poses[36]]*sp_n, for testing a single pose
-    render_timesteps = np.arange(sp_n) / (sp_n - 1)
+    # # set render settings:
+    # sp_n = 120  # an even number!
+    # sp_poses = [
+    #     pose_spherical(angle, phi, radius, rotZ, r_center[0], r_center[1], r_center[2])
+    #     for angle in np.linspace(-180, 180, sp_n + 1)[:-1]
+    # ]
+    # render_poses = torch.stack(sp_poses, 0)  # [sp_poses[36]]*sp_n, for testing a single pose
+    # render_timesteps = np.arange(sp_n) / (sp_n - 1)
 
-    return imgs, poses, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far
+    return imgs, poses, hwf, voxel_tran, voxel_scale, near, far

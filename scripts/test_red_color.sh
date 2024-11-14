@@ -1,11 +1,11 @@
 python run_nerf_density_color.py \
-    --config configs/realcapture_blue.txt \
+    --config configs/realcapture_red.txt \
     --lrate 0.01 \
     --lrate_den 1e-4 \
     --lrate_decay 100000 \
     --N_iters 300000 \
     --i_weights 100000 \
-    --expname exp_density_256_128_view2_blue_color_correctbbox \
+    --expname exp_density_256_128_view2_red_color_correctbbox \
     --finest_resolution 256 \
     --base_resolution 16 \
     --finest_resolution_t 128 \

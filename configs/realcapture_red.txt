@@ -1,5 +1,5 @@
 expname = realcapture_red
-basedir = ./logs
+basedir = /data/Dynamics/HyFluid_logs
 datadir = /data/Dynamics/RealCaptureBlackBlueCloudRedBallAnotherData
 
 N_samples = 192

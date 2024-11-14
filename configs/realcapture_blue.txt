@@ -1,5 +1,5 @@
 expname = realcapture_blue
-basedir = ./logs
+basedir = /data/Dynamics/HyFluid_logs
 datadir = /data/Dynamics/RealCaptureBlackBlueCloudOneData
 
 N_samples = 192

@@ -1,5 +1,5 @@
 expname = scalarflowreal
-basedir = ./logs
+basedir = /data/Dynamics/HyFluid_logs
 datadir = data/ScalarReal
 
 N_samples = 192

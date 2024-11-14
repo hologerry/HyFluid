@@ -142,7 +142,7 @@ def render_path(render_poses, hwf, K, render_kwargs, gt_imgs=None, savedir=None,
 
         if gt_imgs is not None:
             gt_img = torch.tensor(gt_imgs[i].squeeze(), dtype=torch.float32)  # [H, W, 3]
-            gt_img8 = to8b(gt_img.cpu().numpy())
+            # gt_img8 = to8b(gt_img.cpu().numpy())
             gt_img = gt_img[90:960, 45:540]
             rgb = rgb[90:960, 45:540]
             lpips_value = lpips_net(rgb.permute(2, 0, 1), gt_img.permute(2, 0, 1), normalize=True).item()
@@ -157,11 +157,13 @@ def render_path(render_poses, hwf, K, render_kwargs, gt_imgs=None, savedir=None,
             # save rgb and depth as a figure
             rgb8 = to8b(rgbs[-1])
             imageio.imsave(os.path.join(savedir, "rgb_{:03d}.png".format(i)), rgb8)
-            depth = depths[-1]
-            colored_depth_map = plt.cm.viridis(depth.squeeze())
-            imageio.imwrite(
-                os.path.join(savedir, "depth_{:03d}.png".format(i)), (colored_depth_map * 255).astype(np.uint8)
-            )
+            gt_img8 = to8b(gt_img.cpu().numpy())
+            imageio.imsave(os.path.join(savedir, "gt_{:03d}.png".format(i)), gt_img8)
+            # depth = depths[-1]
+            # colored_depth_map = plt.cm.viridis(depth.squeeze())
+            # imageio.imwrite(
+            #     os.path.join(savedir, "depth_{:03d}.png".format(i)), (colored_depth_map * 255).astype(np.uint8)
+            # )
 
     if savedir is not None:
         merge_imgs(savedir, prefix="rgb_")
@@ -392,27 +394,17 @@ def train():
     parser = config_parser()
     args = parser.parse_args()
 
-    if "scalar" in args.datadir.lower():
-        # Load data
-        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-            load_pinf_frame_data(args.datadir, args.half_res, split="train")
-        )
-        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-            load_pinf_frame_data(args.datadir, args.half_res, split="test")
-        )
-    else:
-        images_train_, poses_train, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-            load_real_capture_frame_data(args.datadir, args.half_res, split="train")
-        )
-        images_test, poses_test, hwf, render_poses, render_timesteps, voxel_tran, voxel_scale, near, far = (
-            load_real_capture_frame_data(args.datadir, args.half_res, split="test")
-        )
+
+    images_train_, poses_train, hwf, voxel_tran, voxel_scale, near, far = (
+        load_real_capture_frame_data(args.datadir, args.half_res, split="train")
+    )
+    images_test, poses_test, hwf, voxel_tran, voxel_scale, near, far = (
+        load_real_capture_frame_data(args.datadir, args.half_res, split="test")
+    )
 
     global bbox_model
     voxel_tran_inv = np.linalg.inv(voxel_tran)
     bbox_model = BBoxTool(voxel_tran_inv, voxel_scale)
-    render_timesteps = torch.tensor(render_timesteps, dtype=torch.float32).cuda()
-    print("Loaded scalarflow", images_train_.shape, render_poses.shape, hwf, args.datadir)
 
     # Cast intrinsics to right types
     H, W, focal = hwf
@@ -444,14 +436,11 @@ def train():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    # Move testing data to GPU
-    render_poses = torch.Tensor(render_poses).cuda()
-
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print("RENDER ONLY")
         with torch.no_grad():
-            testsavedir = os.path.join(basedir, expname, f"testset_renderonly_{start:06d}")
+            testsavedir = os.path.join(basedir, expname, f"testset_view3_renderonly_{start:06d}")
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
             N_timesteps = images_test.shape[0]
@@ -604,7 +593,7 @@ def train():
         ################################
 
         # Rest is logging
-        if i % args.i_weights == 0:
+        if (i % args.i_weights or i == 1000) == 0:
             path = os.path.join(basedir, expname, "{:06d}.tar".format(i))
             torch.save(
                 {
@@ -617,13 +606,7 @@ def train():
             )
             print("Saved checkpoints at", path)
 
-        if i % args.i_video == 0 and i > 0:
-            # Turn on testing mode
-            # testsavedir = os.path.join(basedir, expname, "spiral_{:06d}".format(i))
-            # os.makedirs(testsavedir, exist_ok=True)
-            # with torch.no_grad():
-            #     render_path(render_poses, hwf, K, render_kwargs_test, time_steps=render_timesteps, savedir=testsavedir)
-
+        if (i % args.i_video == 0 or i == 1000) and i > 0:
             testsavedir = os.path.join(basedir, expname, "testset_{:06d}".format(i))
             os.makedirs(testsavedir, exist_ok=True)
             with torch.no_grad():
