@@ -165,9 +165,9 @@ def render_path(render_poses, hwf, K, render_kwargs, gt_imgs=None, savedir=None,
             #     os.path.join(savedir, "depth_{:03d}.png".format(i)), (colored_depth_map * 255).astype(np.uint8)
             # )
 
-    if savedir is not None:
-        merge_imgs(savedir, prefix="rgb_")
-        merge_imgs(savedir, prefix="depth_")
+    # if savedir is not None:
+    #     merge_imgs(savedir, prefix="rgb_")
+    #     merge_imgs(savedir, prefix="depth_")
 
     rgbs = np.stack(rgbs, 0)
     depths = np.stack(depths, 0)
@@ -394,12 +394,20 @@ def train():
     parser = config_parser()
     args = parser.parse_args()
 
-
-    images_train_, poses_train, hwf, voxel_tran, voxel_scale, near, far = (
-        load_real_capture_frame_data(args.datadir, args.half_res, split="train")
+    images_train_, poses_train, hwf, voxel_tran, voxel_scale, near, far = load_real_capture_frame_data(
+        args.datadir, args.half_res, split="train",
     )
-    images_test, poses_test, hwf, voxel_tran, voxel_scale, near, far = (
-        load_real_capture_frame_data(args.datadir, args.half_res, split="test")
+    if args.render_only or args.run_future_pred:
+        # test_view = "0"
+        # test_view = "1"
+        # test_view = "3"
+        test_view = "4"
+    else:
+        test_view = "2"
+    print(f"Testing view {test_view}")
+
+    images_test, poses_test, hwf, voxel_tran, voxel_scale, near, far = load_real_capture_frame_data(
+        args.datadir, args.half_res, split="test", test_view=test_view,
     )
 
     global bbox_model
@@ -440,7 +448,7 @@ def train():
     if args.render_only:
         print("RENDER ONLY")
         with torch.no_grad():
-            testsavedir = os.path.join(basedir, expname, f"testset_view3_renderonly_{start:06d}")
+            testsavedir = os.path.join(basedir, expname, f"testset_view{test_view}_renderonly_{start:06d}")
             os.makedirs(testsavedir, exist_ok=True)
             test_view_pose = torch.tensor(poses_test[0])
             N_timesteps = images_test.shape[0]
@@ -471,7 +479,9 @@ def train():
                 args.use_project,
                 args.y_start,
             )
-            boundary_types = ti.Matrix([[1, 1], [2, 1], [1, 1]], ti.i32)  # boundaries: 1 means Dirichlet, 2 means Neumann
+            boundary_types = ti.Matrix(
+                [[1, 1], [2, 1], [1, 1]], ti.i32
+            )  # boundaries: 1 means Dirichlet, 2 means Neumann
             project_solver = MGPCG_3(boundary_types=boundary_types, N=[rx, proj_y, rz], base_level=3)
 
             testsavedir = os.path.join(basedir, expname, "run_future_pred_{:06d}".format(start))
@@ -593,7 +603,7 @@ def train():
         ################################
 
         # Rest is logging
-        if (i % args.i_weights or i == 1000) == 0:
+        if i % args.i_weights == 0 or i == 1000:
             path = os.path.join(basedir, expname, "{:06d}.tar".format(i))
             torch.save(
                 {

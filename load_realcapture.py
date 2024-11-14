@@ -44,7 +44,7 @@ def pose_spherical(theta, phi, radius, rotZ=True, wx=0.0, wy=0.0, wz=0.0):
     return c2w
 
 
-def load_real_capture_frame_data(basedir, half_res=False, split="train"):
+def load_real_capture_frame_data(basedir, half_res=False, split="train", test_view="2"):
     # frame data
     all_imgs = []
     all_poses = []
@@ -63,7 +63,7 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     # x,y,z
     voxel_tran = np.array(
         [
-            [0.0, 0.0, 1.0, -0.11816665828228],
+            [0.0, 0.0, 1.0, -0.21816665828228],
             [0.0, 1.0, 0.0, -0.044627271592617035 * 5.0],
             [-1.0, 0.0, 0.0, -0.004908999893814325],
             [0.0, 0.0, 0.0, 1.0],
@@ -71,7 +71,7 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     )
     # swap_zx
     voxel_tran = np.stack([voxel_tran[:, 2], voxel_tran[:, 1], voxel_tran[:, 0], voxel_tran[:, 3]], axis=1)
-    voxel_scale = np.broadcast_to([0.5009 * 2.0, 0.73635 * 2.0, 0.4909 * 2.0], [3])
+    voxel_scale = np.broadcast_to([0.4909 * 2.5, 0.73635 * 2.0, 0.4909 * 2.0], [3])
 
     # read video frames
     # all videos should be synchronized, having the same frame_rate and frame_num
@@ -82,7 +82,7 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     else:
         # target_cam_names = ["0", "1", "3", "4"]
         # current code only support single view testing
-        target_cam_names = ["2"]
+        target_cam_names = [test_view]
 
     frame_nums = 120
     if "red" in basedir.lower():
@@ -134,6 +134,5 @@ def load_real_capture_frame_data(basedir, half_res=False, split="train"):
     hwf = np.float32([H, W, Focal])
 
     print(f"real capture {split} {imgs.shape}, {poses.shape}, {hwf}")
-
 
     return imgs, poses, hwf, voxel_tran, voxel_scale, near, far
